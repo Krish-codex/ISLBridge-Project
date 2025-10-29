@@ -288,7 +288,7 @@ This project is licensed under the **MIT License** - feel free to use and modify
 
 **ISL Bridge** - Making sign language communication accessible to everyone! 🤟
 
-**Repository:** [ISLBridge-SIH2025](https://github.com/Krish-codex/ISLBridge-Project)
+**Repository:** [ISLBridge-Project](https://github.com/Krish-codex/ISLBridge-Project)
 
 ---
 

@@ -18,8 +18,11 @@ for dir_path in [DATA_DIR, MODELS_DIR, LOGS_DIR, EXPORTS_DIR]:
 
 # Data paths
 RAW_DATA_DIR = DATA_DIR / "raw"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
-AUGMENTED_DATA_DIR = DATA_DIR / "augmented"
+RAW_DATA_DIR.mkdir(exist_ok=True)
+
+# Create the main dataset directory
+FRAMES_DIR = RAW_DATA_DIR / "Frames_Word_Level"
+FRAMES_DIR.mkdir(exist_ok=True)
 
 # LSTM Model configuration
 MODEL_CONFIG = {

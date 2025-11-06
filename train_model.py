@@ -187,10 +187,11 @@ class ISLDatasetProcessor:
             return
         
         try:
+            feature_dim = self.processed_data[0].shape[0]
             data = {
                 'features': [feat.tolist() for feat in self.processed_data],
                 'labels': self.labels,
-                'feature_dim': self.processed_data[0].shape[0] if self.processed_data else 0,
+                'feature_dim': feature_dim,
                 'num_samples': len(self.processed_data),
                 'num_classes': len(set(self.labels))
             }

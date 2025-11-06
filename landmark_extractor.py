@@ -163,15 +163,11 @@ class LandmarkExtractor:
                 if self.buffer_index >= sequence_length:
                     # Simple case: extract from current position backwards
                     start_idx = self.buffer_index - sequence_length
-                    if start_idx < 0:
-                        raise RuntimeError(f"Invalid start index {start_idx}")
                     return self.feature_buffer[start_idx:self.buffer_index].copy()
                 else:
                     # Wrap around case: extract from end and beginning
                     part1_size = sequence_length - self.buffer_index
                     part1_start = self.buffer_size - part1_size
-                    if part1_start < 0:
-                        raise RuntimeError(f"Invalid part1 start {part1_start}")
                     
                     part1 = self.feature_buffer[part1_start:]
                     part2 = self.feature_buffer[:self.buffer_index]

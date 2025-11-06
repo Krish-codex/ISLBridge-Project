@@ -130,8 +130,6 @@ dmypy.json
 
 # Project specific
 data/raw/
-data/processed/
-data/augmented/
 models/*.h5
 models/*.json
 logs/

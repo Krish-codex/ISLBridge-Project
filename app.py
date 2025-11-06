@@ -16,7 +16,7 @@ import logging
 from model import ISLModel
 from landmark_extractor import LandmarkExtractor
 from enhanced_translation import MultiLanguageTranslator
-from config import MODEL_CONFIG
+from config import MODEL_CONFIG, APP_CONFIG
 import torch
 
 # Configure logging
@@ -58,6 +58,7 @@ class ISLBridgeApp:
         self.extractor = None
         self.recognition_model = None
         self.model_ready = False
+        self.model_load_lock = threading.Lock()  # Thread-safe model loading
         self.translator = None
         self.available_classes = []  # Will be loaded from trained model
         
@@ -73,11 +74,11 @@ class ISLBridgeApp:
         
         # Performance optimization: frame skipping
         self.frame_counter = 0
-        self.prediction_interval = 5  # Predict every 5 frames (reduces lag)
+        self.prediction_interval = APP_CONFIG.get("prediction_interval", 5)  # From config
         
         # Previous sign tracking with timeout
         self.last_prediction_time = 0
-        self.prediction_timeout = 2.0  # Reset after 2 seconds of no new predictions
+        self.prediction_timeout = APP_CONFIG.get("prediction_timeout", 2.0)  # From config
         
         # Build interface
         self.setup_modern_ui()
@@ -89,20 +90,13 @@ class ISLBridgeApp:
         self.root.after(200, self.ensure_window_visible)
     
     def ensure_window_visible(self):
-        """Make absolutely sure the window is visible"""
+        """Make window visible with smooth transition (no flashing)"""
         try:
-            # Show the window dramatically
+            # Show the window smoothly
             self.root.deiconify()  # Make visible
-            self.root.state('zoomed')  # Maximize first
-            self.root.after(100, lambda: self.root.state('normal'))  # Then restore to normal
-            self.root.geometry("1200x700+100+50")  # Position at top-left area
             self.root.lift()
             self.root.focus_force()
             self.root.attributes('-topmost', True)
-            
-            # Flash the window border
-            self.root.attributes('-alpha', 0.3)
-            self.root.after(100, lambda: self.root.attributes('-alpha', 1.0))
             
             # Play system sound to notify user
             self.root.bell()
@@ -110,7 +104,7 @@ class ISLBridgeApp:
             # Show a small notification
             self.root.after(500, self.show_startup_message)
         except Exception as e:
-            logger.error(f"Window visibility error: {e}")
+            logger.error(f"Window visibility error: {e}", exc_info=True)
     
     def show_startup_message(self):
         """Show startup notification"""
@@ -446,35 +440,61 @@ class ISLBridgeApp:
     
     def load_model_async(self):
         def load():
-            try:
-                self.status_indicator.config(text="● Loading...", fg='#f39c12')
-                self.extractor = LandmarkExtractor()
-                self.recognition_model = ISLModel()
-                self.translator = MultiLanguageTranslator()
-                
-                model_path = Path("models/isl_trained_model.pth")
-                if model_path.exists():
-                    # Single canonical load - returns label classes
-                    label_classes = self.recognition_model.load_model("models/isl_trained_model")
+            with self.model_load_lock:  # Thread-safe model loading
+                try:
+                    self.root.after(0, lambda: self.status_indicator.config(text="● Loading...", fg='#f39c12'))
                     
-                    if label_classes:
-                        self.available_classes = label_classes
-                        self.root.after(0, lambda: self.update_info_text())
-                    else:
-                        # Fallback: use config classes
-                        from config import ISL_CLASSES
-                        self.available_classes = ISL_CLASSES
+                    self.extractor = LandmarkExtractor()
+                    self.recognition_model = ISLModel()
+                    self.translator = MultiLanguageTranslator()
                     
-                    self.model_ready = True
-                    self.root.after(0, lambda: self.status_indicator.config(text="● Ready", fg='#2ecc71'))
-                    logger.info(f"Model loaded successfully with {len(self.available_classes)} classes: {self.available_classes}")
-                else:
-                    self.root.after(0, lambda: messagebox.showerror("Error", 
-                        "No trained model found!\n\nPlease train the model first:\npython train_model.py"))
-                    self.root.after(0, lambda: self.status_indicator.config(text="● No Model", fg='#e74c3c'))
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load model: {e}"))
-                self.root.after(0, lambda: self.status_indicator.config(text="● Error", fg='#e74c3c'))
+                    # Notify user if translation is unavailable
+                    if not self.translator.translation_available:
+                        logger.warning("Translation service unavailable. Using local dictionary only.")
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Translation Limited",
+                            "Online translation service is not available.\n\n"
+                            "Install deep-translator for full multi-language support:\n"
+                            "pip install deep-translator\n\n"
+                            "Local gesture translations will still work."
+                        ))
+                    
+                    model_path = Path("models/isl_trained_model.pth")
+                    if not model_path.exists():
+                        self.root.after(0, lambda: messagebox.showerror("Error", 
+                            "No trained model found!\n\nPlease train the model first:\npython train_model.py"))
+                        self.root.after(0, lambda: self.status_indicator.config(text="● No Model", fg='#e74c3c'))
+                        return
+                    
+                    # Validate checkpoint file
+                    try:
+                        # Single canonical load - returns label classes
+                        label_classes = self.recognition_model.load_model("models/isl_trained_model")
+                        
+                        if label_classes:
+                            self.available_classes = label_classes
+                            self.root.after(0, lambda: self.update_info_text())
+                        else:
+                            # Fallback: use config classes
+                            from config import ISL_CLASSES
+                            self.available_classes = ISL_CLASSES
+                            logger.warning("Using fallback classes from config")
+                        
+                        self.model_ready = True
+                        self.root.after(0, lambda: self.status_indicator.config(text="● Ready", fg='#2ecc71'))
+                        logger.info(f"Model loaded successfully with {len(self.available_classes)} classes: {self.available_classes}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to load model checkpoint: {e}", exc_info=True)
+                        self.root.after(0, lambda: messagebox.showerror("Error", 
+                            f"Failed to load model checkpoint!\n\nThe model file may be corrupted.\n\n"
+                            f"Error: {str(e)}\n\nPlease retrain the model:\npython train_model.py"))
+                        self.root.after(0, lambda: self.status_indicator.config(text="● Error", fg='#e74c3c'))
+                        
+                except Exception as e:
+                    logger.error(f"Failed to load model: {e}", exc_info=True)
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load model: {e}"))
+                    self.root.after(0, lambda: self.status_indicator.config(text="● Error", fg='#e74c3c'))
         
         threading.Thread(target=load, daemon=True).start()
     
@@ -527,11 +547,14 @@ class ISLBridgeApp:
             return
         
         try:
-            # Try camera indices 1, 2, 0 (skip virtual camera at 0 first)
+            # Use configurable camera indices
+            camera_indices = APP_CONFIG.get("camera_retry_indices", [1, 2, 0])
             camera_opened = False
-            for cam_index in [1, 2, 0]:  # Try 1 and 2 before 0
+            
+            for cam_index in camera_indices:
                 logger.info(f"Trying camera index {cam_index}...")
                 self.camera = cv2.VideoCapture(cam_index)
+                
                 if self.camera.isOpened():
                     # Test if camera actually works by reading a frame
                     ret, test_frame = self.camera.read()
@@ -544,15 +567,21 @@ class ISLBridgeApp:
                         self.camera.release()
                 else:
                     logger.debug(f"✗ Camera {cam_index} not available")
-                    self.camera.release()
+                    if self.camera:
+                        self.camera.release()
             
             if not camera_opened:
-                messagebox.showerror("Error", 
+                error_message = (
                     "Cannot open camera!\n\n"
-                    "Please make sure:\n"
-                    "1. No other apps are using the camera\n"
-                    "2. Camera permissions are enabled\n"
-                    "3. Camera drivers are installed")
+                    f"Tried camera indices: {camera_indices}\n\n"
+                    "Troubleshooting:\n"
+                    "1. Check if another app is using the camera\n"
+                    "2. Verify camera permissions are enabled\n"
+                    "3. Ensure camera drivers are installed\n"
+                    "4. Try disconnecting/reconnecting the camera"
+                )
+                messagebox.showerror("Camera Error", error_message)
+                logger.error("Failed to open any camera")
                 return
             
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -564,17 +593,29 @@ class ISLBridgeApp:
             self.capture_frames()
             
         except Exception as e:
-            messagebox.showerror("Error", f"Camera error: {e}")
-            logger.error(f"Camera error: {e}", exc_info=True)
+            error_msg = f"Camera error: {str(e)}"
+            messagebox.showerror("Error", error_msg)
+            logger.error(error_msg, exc_info=True)
     
     def stop_camera(self):
         self.recording = False
         if self.camera:
             self.camera.release()
+            self.camera = None  # Clear reference for memory cleanup
         self.start_button.config(text="🎥 Start Camera", bg='#3498db', activebackground='#2980b9')
         self.status_indicator.config(text="● Ready", fg='#2ecc71')
         self.video_label.config(image='', text="📷\n\nClick 'Start Camera' to begin\n\nShow your ISL signs here")
+        
+        # Clear video frame reference for memory cleanup
+        if hasattr(self, '_video_image_ref'):
+            self._video_image_ref = None
+        
         self.gesture_buffer.clear()
+        
+        # GPU memory cleanup if CUDA is available
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug("GPU memory cache cleared")
     
     def capture_frames(self):
         if not self.recording or not self.camera:
@@ -593,7 +634,9 @@ class ISLBridgeApp:
                 if self.model_ready and self.extractor and self.recognition_model:
                     self.process_frame(frame_rgb)
             
-            self.root.after(30, self.capture_frames)
+            # Use configurable frame capture interval
+            interval = APP_CONFIG.get("frame_capture_interval", 30)
+            self.root.after(interval, self.capture_frames)
             
         except Exception as e:
             logger.error(f"Frame capture error: {e}", exc_info=True)
@@ -748,12 +791,28 @@ class ISLBridgeApp:
         self.gesture_buffer.clear()
     
     def on_closing(self):
-        """Handle app closing"""
-        self.stop_camera()
-        # Cleanup MediaPipe resources
-        if self.extractor:
-            self.extractor.close()
-        self.root.destroy()
+        """Handle app closing with proper resource cleanup"""
+        try:
+            self.stop_camera()
+            
+            # Cleanup MediaPipe resources
+            if self.extractor:
+                try:
+                    self.extractor.close()
+                    logger.info("MediaPipe resources cleaned up")
+                except Exception as e:
+                    logger.warning(f"Error closing extractor: {e}")
+            
+            # GPU memory cleanup
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("GPU memory cleared")
+            
+            self.root.destroy()
+            logger.info("Application closed successfully")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}", exc_info=True)
+            self.root.destroy()
 
 def main():
     """Main entry point"""

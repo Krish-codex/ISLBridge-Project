@@ -65,8 +65,15 @@ class LandmarkExtractor:
             landmarks = self._extract_essential_features(results)
             
             if landmarks is not None:
+                # Validate buffer boundaries
+                if not (0 <= self.buffer_index < self.buffer_size):
+                    raise RuntimeError(
+                        f"Buffer index {self.buffer_index} out of bounds [0, {self.buffer_size})"
+                    )
+                
                 self.feature_buffer[self.buffer_index] = landmarks
                 self.buffer_index = (self.buffer_index + 1) % self.buffer_size
+                
                 if not self.buffer_filled and self.buffer_index == 0:
                     self.buffer_filled = True
                 
@@ -74,8 +81,13 @@ class LandmarkExtractor:
             
             return None
             
+        except RuntimeError as e:
+            logger.error(f"Buffer boundary violation: {e}", exc_info=True)
+            # Reset buffer on boundary violation
+            self.reset_buffer()
+            return None
         except Exception as e:
-            logger.error(f"Landmark extraction error: {e}")
+            logger.error(f"Landmark extraction error: {e}", exc_info=True)
             return None
     
     def _extract_essential_features(self, results) -> Optional[np.ndarray]:
@@ -134,19 +146,38 @@ class LandmarkExtractor:
         return None
     
     def get_sequence_features(self, sequence_length: int = 10) -> Optional[np.ndarray]:
-        """Get recent sequence features efficiently"""
+        """Get recent sequence features efficiently with boundary checks"""
+        # Validate sequence length
+        if sequence_length <= 0:
+            raise ValueError("Sequence length must be positive")
+        if sequence_length > self.buffer_size:
+            raise ValueError(
+                f"Sequence length {sequence_length} exceeds buffer size {self.buffer_size}"
+            )
+        
         if not self.buffer_filled and self.buffer_index < sequence_length:
             return None
         
-        if self.buffer_filled:
-            if self.buffer_index >= sequence_length:
-                return self.feature_buffer[self.buffer_index - sequence_length:self.buffer_index].copy()
+        try:
+            if self.buffer_filled:
+                if self.buffer_index >= sequence_length:
+                    # Simple case: extract from current position backwards
+                    start_idx = self.buffer_index - sequence_length
+                    return self.feature_buffer[start_idx:self.buffer_index].copy()
+                else:
+                    # Wrap around case: extract from end and beginning
+                    part1_size = sequence_length - self.buffer_index
+                    part1_start = self.buffer_size - part1_size
+                    
+                    part1 = self.feature_buffer[part1_start:]
+                    part2 = self.feature_buffer[:self.buffer_index]
+                    return np.vstack([part1, part2])
             else:
-                part1 = self.feature_buffer[self.buffer_size - (sequence_length - self.buffer_index):]
-                part2 = self.feature_buffer[:self.buffer_index]
-                return np.vstack([part1, part2])
-        else:
-            return self.feature_buffer[:self.buffer_index][-sequence_length:].copy()
+                # Buffer not yet filled, extract what we have
+                return self.feature_buffer[:self.buffer_index][-sequence_length:].copy()
+        except Exception as e:
+            logger.error(f"Error getting sequence features: {e}", exc_info=True)
+            return None
     
     def get_memory_usage(self) -> dict:
         """Get memory usage information"""

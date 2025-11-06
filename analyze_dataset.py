@@ -1,4 +1,4 @@
-﻿"""
+"""
 Dataset Analysis Tool for ISL Bridge
 """
 import json
@@ -31,7 +31,10 @@ def analyze_current_dataset():
     print(f"📊 Current Dataset Statistics:")
     print(f"   Gesture Classes: {len(gesture_stats)}")
     print(f"   Total Frames: {total_frames}")
-    print(f"   Average Frames per Gesture: {total_frames/len(gesture_stats):.1f}")
+    if len(gesture_stats) > 0:
+        print(f"   Average Frames per Gesture: {total_frames/len(gesture_stats):.1f}")
+    else:
+        print(f"   Average Frames per Gesture: N/A (no gesture folders found)")
     
     print(f"\n📈 Top 10 Gestures by Frame Count:")
     sorted_gestures = sorted(gesture_stats.items(), key=lambda x: x[1], reverse=True)

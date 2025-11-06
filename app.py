@@ -11,12 +11,20 @@ import threading
 from PIL import Image, ImageTk
 import numpy as np
 from pathlib import Path
+import logging
 
 from model import ISLModel
 from landmark_extractor import LandmarkExtractor
 from enhanced_translation import MultiLanguageTranslator
 from config import MODEL_CONFIG
 import torch
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class ISLBridgeApp:
     def __init__(self, root):
@@ -102,7 +110,7 @@ class ISLBridgeApp:
             # Show a small notification
             self.root.after(500, self.show_startup_message)
         except Exception as e:
-            print(f"Window visibility error: {e}")
+            logger.error(f"Window visibility error: {e}")
     
     def show_startup_message(self):
         """Show startup notification"""
@@ -446,12 +454,11 @@ class ISLBridgeApp:
                 
                 model_path = Path("models/isl_trained_model.pth")
                 if model_path.exists():
-                    self.recognition_model.load_model("models/isl_trained_model")
+                    # Single canonical load - returns label classes
+                    label_classes = self.recognition_model.load_model("models/isl_trained_model")
                     
-                    # Load available classes from the trained model
-                    checkpoint = torch.load(model_path, map_location='cpu')
-                    if 'label_encoder_classes' in checkpoint and checkpoint['label_encoder_classes']:
-                        self.available_classes = checkpoint['label_encoder_classes']
+                    if label_classes:
+                        self.available_classes = label_classes
                         self.root.after(0, lambda: self.update_info_text())
                     else:
                         # Fallback: use config classes
@@ -460,7 +467,7 @@ class ISLBridgeApp:
                     
                     self.model_ready = True
                     self.root.after(0, lambda: self.status_indicator.config(text="● Ready", fg='#2ecc71'))
-                    print(f"Model loaded successfully with {len(self.available_classes)} classes: {self.available_classes}")
+                    logger.info(f"Model loaded successfully with {len(self.available_classes)} classes: {self.available_classes}")
                 else:
                     self.root.after(0, lambda: messagebox.showerror("Error", 
                         "No trained model found!\n\nPlease train the model first:\npython train_model.py"))
@@ -486,7 +493,9 @@ class ISLBridgeApp:
         if numbers:
             parts.append(f"Numbers: {', '.join(sorted(numbers, key=int))}")
         if letters:
-            parts.append(f"Letters: {letters[0]}-{letters[-1]}")
+            # Sort letters to ensure proper range display
+            letters_sorted = sorted(letters)
+            parts.append(f"Letters: {letters_sorted[0]}-{letters_sorted[-1]}")
         if words:
             word_preview = ', '.join(words[:5])
             if len(words) > 5:
@@ -521,20 +530,20 @@ class ISLBridgeApp:
             # Try camera indices 1, 2, 0 (skip virtual camera at 0 first)
             camera_opened = False
             for cam_index in [1, 2, 0]:  # Try 1 and 2 before 0
-                print(f"Trying camera index {cam_index}...")
+                logger.info(f"Trying camera index {cam_index}...")
                 self.camera = cv2.VideoCapture(cam_index)
                 if self.camera.isOpened():
                     # Test if camera actually works by reading a frame
                     ret, test_frame = self.camera.read()
                     if ret and test_frame is not None and test_frame.size > 0:
-                        print(f"✓ Camera {cam_index} opened and tested successfully!")
+                        logger.info(f"✓ Camera {cam_index} opened and tested successfully!")
                         camera_opened = True
                         break
                     else:
-                        print(f"✗ Camera {cam_index} opened but cannot read frames")
+                        logger.warning(f"✗ Camera {cam_index} opened but cannot read frames")
                         self.camera.release()
                 else:
-                    print(f"✗ Camera {cam_index} not available")
+                    logger.debug(f"✗ Camera {cam_index} not available")
                     self.camera.release()
             
             if not camera_opened:
@@ -556,7 +565,7 @@ class ISLBridgeApp:
             
         except Exception as e:
             messagebox.showerror("Error", f"Camera error: {e}")
-            print(f"Camera error: {e}")
+            logger.error(f"Camera error: {e}", exc_info=True)
     
     def stop_camera(self):
         self.recording = False
@@ -587,7 +596,7 @@ class ISLBridgeApp:
             self.root.after(30, self.capture_frames)
             
         except Exception as e:
-            print(f"Frame capture error: {e}")
+            logger.error(f"Frame capture error: {e}", exc_info=True)
     
     def display_frame(self, frame_rgb):
         """Display RGB frame in the video label"""
@@ -598,7 +607,7 @@ class ISLBridgeApp:
             self.video_label.config(image=photo, text="")
             self._video_image_ref = photo  
         except Exception as e:
-            print(f"Display error: {e}")
+            logger.error(f"Display error: {e}")
     
     def process_frame(self, frame_rgb):
         """Process RGB frame for gesture recognition"""
@@ -630,10 +639,10 @@ class ISLBridgeApp:
                                 self.update_prediction(predicted_sign, confidence_score)
                     
                     except Exception as e:
-                        print(f"Prediction error: {e}")
+                        logger.error(f"Prediction error: {e}", exc_info=True)
         
         except Exception as e:
-            print(f"Processing error: {e}")
+            logger.error(f"Processing error: {e}", exc_info=True)
     
     def update_prediction(self, predicted_sign, confidence_score):
         """Update prediction display without automatically adding to sentence"""
@@ -692,10 +701,14 @@ class ISLBridgeApp:
     def safe_speak_text(self, text):
         try:
             if self.translator and hasattr(self.translator, 'speak_text'):
-                translated_text = self.translator.translate_gesture(text, self.selected_language)
+                # Use translate_sentence for full sentences, translate_gesture for single gestures
+                if len(text.split()) > 1:
+                    translated_text = self.translator.translate_sentence(text, self.selected_language)
+                else:
+                    translated_text = self.translator.translate_gesture(text, self.selected_language)
                 self.translator.speak_text(translated_text, self.selected_language)
         except Exception as e:
-            print(f"TTS error: {e}")
+            logger.error(f"TTS error: {e}", exc_info=True)
     
     def _do_speak(self, text):
         self.safe_speak_text(text)
@@ -737,6 +750,9 @@ class ISLBridgeApp:
     def on_closing(self):
         """Handle app closing"""
         self.stop_camera()
+        # Cleanup MediaPipe resources
+        if self.extractor:
+            self.extractor.close()
         self.root.destroy()
 
 def main():

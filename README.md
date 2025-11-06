@@ -180,7 +180,6 @@ The LSTM model is trained on **sequences** of landmarks:
 
 ### Data Directories
 * `data/raw/`: Place your training images and videos here
-* `data/processed/`: Auto-generated processed features
 * `models/`: Trained model saved here (`isl_trained_model.pth`)
 * `logs/`: Training logs and plots
 

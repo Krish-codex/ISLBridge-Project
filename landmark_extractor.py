@@ -65,9 +65,11 @@ class LandmarkExtractor:
             landmarks = self._extract_essential_features(results)
             
             if landmarks is not None:
-                # Add assertion for buffer boundaries
-                assert 0 <= self.buffer_index < self.buffer_size, \
-                    f"Buffer index {self.buffer_index} out of bounds [0, {self.buffer_size})"
+                # Validate buffer boundaries
+                if not (0 <= self.buffer_index < self.buffer_size):
+                    raise RuntimeError(
+                        f"Buffer index {self.buffer_index} out of bounds [0, {self.buffer_size})"
+                    )
                 
                 self.feature_buffer[self.buffer_index] = landmarks
                 self.buffer_index = (self.buffer_index + 1) % self.buffer_size
@@ -79,7 +81,7 @@ class LandmarkExtractor:
             
             return None
             
-        except AssertionError as e:
+        except RuntimeError as e:
             logger.error(f"Buffer boundary violation: {e}", exc_info=True)
             # Reset buffer on boundary violation
             self.reset_buffer()
@@ -146,9 +148,12 @@ class LandmarkExtractor:
     def get_sequence_features(self, sequence_length: int = 10) -> Optional[np.ndarray]:
         """Get recent sequence features efficiently with boundary checks"""
         # Validate sequence length
-        assert sequence_length > 0, "Sequence length must be positive"
-        assert sequence_length <= self.buffer_size, \
-            f"Sequence length {sequence_length} exceeds buffer size {self.buffer_size}"
+        if sequence_length <= 0:
+            raise ValueError("Sequence length must be positive")
+        if sequence_length > self.buffer_size:
+            raise ValueError(
+                f"Sequence length {sequence_length} exceeds buffer size {self.buffer_size}"
+            )
         
         if not self.buffer_filled and self.buffer_index < sequence_length:
             return None
@@ -158,13 +163,15 @@ class LandmarkExtractor:
                 if self.buffer_index >= sequence_length:
                     # Simple case: extract from current position backwards
                     start_idx = self.buffer_index - sequence_length
-                    assert start_idx >= 0, f"Invalid start index {start_idx}"
+                    if start_idx < 0:
+                        raise RuntimeError(f"Invalid start index {start_idx}")
                     return self.feature_buffer[start_idx:self.buffer_index].copy()
                 else:
                     # Wrap around case: extract from end and beginning
                     part1_size = sequence_length - self.buffer_index
                     part1_start = self.buffer_size - part1_size
-                    assert part1_start >= 0, f"Invalid part1 start {part1_start}"
+                    if part1_start < 0:
+                        raise RuntimeError(f"Invalid part1 start {part1_start}")
                     
                     part1 = self.feature_buffer[part1_start:]
                     part2 = self.feature_buffer[:self.buffer_index]

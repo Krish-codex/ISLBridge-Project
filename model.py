@@ -230,7 +230,13 @@ class ISLModel:
         
         print(f"Model saved to {filepath}.pth")
     
-    def load_model(self, filepath: Optional[str] = None):
+    def load_model(self, filepath: Optional[str] = None) -> Optional[List[str]]:
+        """
+        Load model from checkpoint file
+        
+        Returns:
+            List of label classes if available, None otherwise
+        """
         MODELS_DIR, _, _ = get_config()
         
         if filepath is None:
@@ -242,10 +248,13 @@ class ISLModel:
         self.model = GestureRecognitionLSTM(**config).to(self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         
+        label_classes = None
         if checkpoint['label_encoder_classes']:
-            self.label_encoder.fit(checkpoint['label_encoder_classes'])
+            label_classes = checkpoint['label_encoder_classes']
+            self.label_encoder.classes_ = np.array(label_classes)
         
         print(f"Model loaded from {filepath}.pth")
+        return label_classes
     
     def get_model_size(self) -> Dict[str, float]:
         if self.model is None:

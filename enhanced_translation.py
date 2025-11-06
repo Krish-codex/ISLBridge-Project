@@ -6,11 +6,11 @@ from typing import Optional, Dict, List, Tuple
 import logging
 
 try:
-    from googletrans import Translator
-    GOOGLETRANS_AVAILABLE = True
+    from deep_translator import GoogleTranslator
+    TRANSLATOR_AVAILABLE = True
 except ImportError:
-    GOOGLETRANS_AVAILABLE = False
-    print("Google Translate not available. Install with: pip install googletrans==4.0.0rc1")
+    TRANSLATOR_AVAILABLE = False
+    logging.warning("deep-translator not available. Install with: pip install deep-translator")
 
 try:
     from config import TRANSLATION_CONFIG
@@ -33,6 +33,7 @@ class MultiLanguageTranslator:
         self.tts_engine: Optional[pyttsx3.Engine] = None
         self.google_translator = None
         self.current_language = TRANSLATION_CONFIG.get("default_language", "en")
+        self.translation_available = TRANSLATOR_AVAILABLE
         
         import threading
         self.tts_lock = threading.Lock()
@@ -107,15 +108,18 @@ class MultiLanguageTranslator:
     
     def setup_translation(self):
         """Initialize Google Translate if available"""
-        if GOOGLETRANS_AVAILABLE:
+        if TRANSLATOR_AVAILABLE:
             try:
-                self.google_translator = Translator()
-                logger.info("Google Translator initialized successfully")
+                # deep-translator doesn't require initialization
+                # Translator is created per-request
+                logger.info("Translation service (deep-translator) available")
+                self.translation_available = True
             except Exception as e:
-                logger.error(f"Failed to initialize Google Translator: {e}")
-                self.google_translator = None
+                logger.error(f"Failed to initialize translator: {e}", exc_info=True)
+                self.translation_available = False
         else:
-            logger.info("Using local translation dictionary only")
+            logger.warning("Translation service not available. Install deep-translator for multi-language support.")
+            self.translation_available = False
     
     def setup_tts(self) -> None:
         """Initialize TTS engine with optimized settings"""
@@ -167,22 +171,22 @@ class MultiLanguageTranslator:
         """
         target_lang = target_language or self.current_language
         
+        # First check local dictionary
         if gesture.upper() in self.gesture_dictionary:
             gesture_translations = self.gesture_dictionary[gesture.upper()]
             if target_lang in gesture_translations:
                 return gesture_translations[target_lang]
         
-        if self.google_translator and len(gesture.split()) > 1:
+        # For multi-word gestures, try online translation if available
+        if self.translation_available and len(gesture.split()) > 1:
             try:
-                translated = self.google_translator.translate(
-                    gesture, 
-                    src='en', 
-                    dest=target_lang
-                )
-                return translated.text
+                translator = GoogleTranslator(source='en', target=target_lang)
+                translated = translator.translate(gesture)
+                return translated
             except Exception as e:
-                logger.error(f"Google Translate failed: {e}")
+                logger.error(f"Translation service failed: {e}", exc_info=True)
         
+        # Fallback to original text
         return gesture
     
     def get_supported_languages(self) -> List[Dict[str, str]]:
@@ -218,6 +222,7 @@ class MultiLanguageTranslator:
         """
         target_lang = target_language or self.current_language
         
+        # If all words are single characters, translate each one
         words = sentence.split()
         if all(len(word) == 1 and word.isalnum() for word in words):
             translated_words = []
@@ -225,17 +230,16 @@ class MultiLanguageTranslator:
                 translated_words.append(self.translate_gesture(word, target_lang))
             return " ".join(translated_words)
         
-        if self.google_translator:
+        # Try online translation for full sentences
+        if self.translation_available:
             try:
-                translated = self.google_translator.translate(
-                    sentence,
-                    src='en',
-                    dest=target_lang
-                )
-                return translated.text
+                translator = GoogleTranslator(source='en', target=target_lang)
+                translated = translator.translate(sentence)
+                return translated
             except Exception as e:
-                logger.error(f"Sentence translation failed: {e}")
+                logger.error(f"Sentence translation failed: {e}", exc_info=True)
         
+        # Fallback to original sentence
         return sentence
     
     def speak_text(self, text: str, language: Optional[str] = None) -> bool:

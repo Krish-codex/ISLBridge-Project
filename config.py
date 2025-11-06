@@ -103,3 +103,25 @@ FEATURE_CONFIG = {
     "buffer_size": 30,
     "sliding_window": True
 }
+
+# Application runtime settings
+APP_CONFIG = {
+    "prediction_interval": 5,  # Predict every N frames to reduce lag
+    "prediction_timeout": 2.0,  # Reset after N seconds of no new predictions
+    "frame_capture_interval": 30,  # Milliseconds between frame captures
+    "window_width": 1200,
+    "window_height": 700,
+    "camera_retry_indices": [1, 2, 0],  # Camera indices to try in order
+}
+
+# Training configuration
+TRAINING_CONFIG = {
+    "test_size": 0.2,
+    "val_size": 0.1,
+    "sequence_length": 30,
+    "max_samples_per_class": 1500,
+    "batch_size_large": 16,  # For datasets > 50000 samples
+    "batch_size_default": 32,
+    "early_stopping_accuracy": 0.85,
+    "print_interval": 10,  # Print training stats every N epochs
+}

@@ -15,7 +15,7 @@ import seaborn as sns
 
 from model import ISLModel
 from landmark_extractor import LandmarkExtractor
-from config import RAW_DATA_DIR, MODELS_DIR, LOGS_DIR, ISL_CLASSES
+from config import RAW_DATA_DIR, MODELS_DIR, LOGS_DIR, ISL_CLASSES, TRAINING_CONFIG
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -178,29 +178,55 @@ class ISLDatasetProcessor:
     
     def save_processed_data(self, filepath: str):
         """Save processed dataset for future use"""
-        data = {
-            'features': [feat.tolist() for feat in self.processed_data],
-            'labels': self.labels,
-            'feature_dim': self.processed_data[0].shape[0] if self.processed_data else 0,
-            'num_samples': len(self.processed_data),
-            'num_classes': len(set(self.labels))
-        }
+        if not self.processed_data:
+            logger.error("No processed data to save!")
+            return
         
-        with open(filepath, 'w') as f:
-            json.dump(data, f)
+        if not self.labels:
+            logger.error("No labels to save!")
+            return
         
-        logger.info(f"Processed data saved to {filepath}")
+        try:
+            data = {
+                'features': [feat.tolist() for feat in self.processed_data],
+                'labels': self.labels,
+                'feature_dim': self.processed_data[0].shape[0] if self.processed_data else 0,
+                'num_samples': len(self.processed_data),
+                'num_classes': len(set(self.labels))
+            }
+            
+            with open(filepath, 'w') as f:
+                json.dump(data, f)
+            
+            logger.info(f"Processed data saved to {filepath}")
+            logger.info(f"  Samples: {data['num_samples']}, Classes: {data['num_classes']}, Feature dim: {data['feature_dim']}")
+        except Exception as e:
+            logger.error(f"Failed to save processed data: {e}", exc_info=True)
     
     def load_processed_data(self, filepath: str) -> Tuple[List[np.ndarray], List[str]]:
         """Load previously processed dataset"""
-        with open(filepath, 'r') as f:
-            data = json.load(f)
-        
-        features = [np.array(feat) for feat in data['features']]
-        labels = data['labels']
-        
-        logger.info(f"Loaded {len(features)} samples from {filepath}")
-        return features, labels
+        try:
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            
+            # Validate loaded data
+            if 'features' not in data or 'labels' not in data:
+                raise ValueError("Invalid processed data file: missing 'features' or 'labels'")
+            
+            if len(data['features']) != len(data['labels']):
+                raise ValueError(f"Data mismatch: {len(data['features'])} features but {len(data['labels'])} labels")
+            
+            features = [np.array(feat) for feat in data['features']]
+            labels = data['labels']
+            
+            logger.info(f"Loaded {len(features)} samples from {filepath}")
+            logger.info(f"  Feature dimension: {data.get('feature_dim', 'unknown')}")
+            logger.info(f"  Number of classes: {data.get('num_classes', len(set(labels)))}")
+            
+            return features, labels
+        except Exception as e:
+            logger.error(f"Failed to load processed data: {e}", exc_info=True)
+            raise
 
 class ISLTrainer:
     """Train ISL recognition model"""
@@ -210,9 +236,15 @@ class ISLTrainer:
         self.history = None
         
     def prepare_data(self, features: List[np.ndarray], labels: List[str], 
-                    test_size: float = 0.2, val_size: float = 0.1, sequence_length: int = 30,
-                    max_samples_per_class: int = 1500) -> Dict:
+                    test_size: float = None, val_size: float = None, sequence_length: int = None,
+                    max_samples_per_class: int = None) -> Dict:
         logger.info("Preparing data for training...")
+        
+        # Use config defaults if not provided
+        test_size = test_size if test_size is not None else TRAINING_CONFIG.get("test_size", 0.2)
+        val_size = val_size if val_size is not None else TRAINING_CONFIG.get("val_size", 0.1)
+        sequence_length = sequence_length if sequence_length is not None else TRAINING_CONFIG.get("sequence_length", 30)
+        max_samples_per_class = max_samples_per_class if max_samples_per_class is not None else TRAINING_CONFIG.get("max_samples_per_class", 1500)
         
         X = np.array(features)
         y = np.array(labels)
@@ -271,7 +303,15 @@ class ISLTrainer:
                 X_temp, y_temp, test_size=val_size/(1-test_size), random_state=42, stratify=y_temp
             )
         except ValueError as e:
-            logger.warning(f"Stratified split failed: {e}. Using random split.")
+            logger.warning("=" * 80)
+            logger.warning("⚠️  STRATIFIED SPLIT FAILED")
+            logger.warning(f"Reason: {e}")
+            logger.warning("This usually happens when:")
+            logger.warning("  - Some classes have very few samples")
+            logger.warning("  - Class distribution is highly imbalanced")
+            logger.warning("Falling back to random split (may affect validation accuracy)")
+            logger.warning("=" * 80)
+            
             X_temp, X_test, y_temp, y_test = train_test_split(
                 X_sequences, y_sequences, test_size=test_size, random_state=42
             )
@@ -442,7 +482,13 @@ def main():
     
     if os.path.exists(processed_data_path):
         logger.info("Loading previously processed dataset...")
-        features, labels = processor.load_processed_data(processed_data_path)
+        try:
+            features, labels = processor.load_processed_data(processed_data_path)
+        except Exception as e:
+            logger.error(f"Failed to load processed data, reprocessing: {e}")
+            features, labels = processor.load_dataset()
+            if features:
+                processor.save_processed_data(processed_data_path)
     else:
         logger.info("Processing raw dataset...")
         features, labels = processor.load_dataset()
@@ -456,13 +502,22 @@ def main():
     class_dist = processor.get_class_distribution()
     logger.info(f"Class distribution: {class_dist}")
     
-    data_splits = trainer.prepare_data(features, labels, test_size=0.20, val_size=0.10)
+    data_splits = trainer.prepare_data(features, labels)
     
     history = trainer.train_model(data_splits, epochs=100)
     
     eval_results = trainer.evaluate_model(data_splits)
     
     trainer.save_model()
+    
+    # Cleanup old checkpoints
+    try:
+        checkpoint_path = MODELS_DIR / "training_checkpoint.pth"
+        if checkpoint_path.exists():
+            logger.info("Removing training checkpoint (final model saved)")
+            checkpoint_path.unlink()
+    except Exception as e:
+        logger.warning(f"Could not remove training checkpoint: {e}")
     
     plots_dir = LOGS_DIR / "training_plots"
     plots_dir.mkdir(exist_ok=True)
@@ -498,10 +553,12 @@ def main():
     
     eval_results_json = convert_to_json_serializable(eval_results)
     
-    with open(eval_results_path, 'w') as f:
-        json.dump(eval_results_json, f, indent=2)
-    
-    logger.info(f"Evaluation results saved to {eval_results_path}")
+    try:
+        with open(eval_results_path, 'w') as f:
+            json.dump(eval_results_json, f, indent=2)
+        logger.info(f"Evaluation results saved to {eval_results_path}")
+    except Exception as e:
+        logger.error(f"Failed to save evaluation results: {e}", exc_info=True)
     
     logger.info("🎉 Training completed successfully!")
     logger.info(f"Final test accuracy: {eval_results['accuracy']:.3f}")

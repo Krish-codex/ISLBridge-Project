@@ -159,9 +159,17 @@ class ISLModel:
             if epoch % 10 == 0:
                 print(f'Epoch {epoch}: Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f} (Best: {best_accuracy:.4f})')
             
+            # GPU memory cleanup during training
+            if torch.cuda.is_available() and epoch % 10 == 0:
+                torch.cuda.empty_cache()
+            
             if accuracy > 0.85:
                 print(f'Early stopping at epoch {epoch} with accuracy {accuracy:.4f}')
                 break
+        
+        # Final GPU cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         self.history = history
         print(f'Training complete! Best accuracy: {best_accuracy:.4f}')
@@ -177,6 +185,10 @@ class ISLModel:
             X_tensor = torch.FloatTensor(X).to(self.device)
             outputs = self.model(X_tensor)
             probabilities = F.softmax(outputs, dim=1)
+        
+        # GPU memory cleanup after prediction
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
             
         return probabilities.cpu().numpy()
     
@@ -205,7 +217,8 @@ class ISLModel:
             return predicted_class, max_prob
             
         except Exception as e:
-            print(f"Prediction error: {e}")
+            import logging
+            logging.getLogger(__name__).error(f"Prediction error: {e}", exc_info=True)
             return "unknown", 0.0
     
     def save_model(self, filepath: Optional[str] = None):
@@ -237,24 +250,44 @@ class ISLModel:
         Returns:
             List of label classes if available, None otherwise
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         MODELS_DIR, _, _ = get_config()
         
         if filepath is None:
             filepath = str(MODELS_DIR / "optimized_isl_model")
         
-        checkpoint = torch.load(f"{filepath}.pth", map_location=self.device)
-        
-        config = checkpoint['model_config']
-        self.model = GestureRecognitionLSTM(**config).to(self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        
-        label_classes = None
-        if checkpoint['label_encoder_classes']:
-            label_classes = checkpoint['label_encoder_classes']
-            self.label_encoder.classes_ = np.array(label_classes)
-        
-        print(f"Model loaded from {filepath}.pth")
-        return label_classes
+        try:
+            checkpoint = torch.load(f"{filepath}.pth", map_location=self.device)
+            
+            # Validate checkpoint structure
+            if 'model_config' not in checkpoint:
+                raise ValueError("Invalid checkpoint: missing 'model_config'")
+            if 'model_state_dict' not in checkpoint:
+                raise ValueError("Invalid checkpoint: missing 'model_state_dict'")
+            
+            config = checkpoint['model_config']
+            self.model = GestureRecognitionLSTM(**config).to(self.device)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            
+            label_classes = None
+            if checkpoint.get('label_encoder_classes'):
+                label_classes = checkpoint['label_encoder_classes']
+                self.label_encoder.classes_ = np.array(label_classes)
+                logger.info(f"Loaded {len(label_classes)} label classes")
+            else:
+                logger.warning("No label classes found in checkpoint")
+            
+            logger.info(f"Model loaded from {filepath}.pth")
+            return label_classes
+            
+        except FileNotFoundError:
+            logger.error(f"Model file not found: {filepath}.pth")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}", exc_info=True)
+            raise
     
     def get_model_size(self) -> Dict[str, float]:
         if self.model is None:

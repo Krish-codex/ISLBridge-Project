@@ -42,7 +42,8 @@ class LandmarkExtractor:
             min_tracking_confidence=mediapipe_config.get("min_tracking_confidence", 0.5)
         )
         
-        self.feature_dim = 166
+        # Use config-driven feature_dim instead of hardcoding
+        self.feature_dim = feature_config.get("feature_dim", 166)
         self.buffer_size = feature_config.get("buffer_size", 30)
         self.feature_buffer = np.zeros((self.buffer_size, self.feature_dim), dtype=np.float32)
         self.buffer_index = 0
@@ -163,7 +164,14 @@ class LandmarkExtractor:
         self.buffer_index = 0
         self.buffer_filled = False
     
+    def close(self):
+        """Explicitly close MediaPipe resources"""
+        if hasattr(self, 'holistic') and self.holistic:
+            try:
+                self.holistic.close()
+            except AttributeError:
+                pass
+    
     def __del__(self):
         """Cleanup resources"""
-        if hasattr(self, 'holistic'):
-            self.holistic.close()
+        self.close()

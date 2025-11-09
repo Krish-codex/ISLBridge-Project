@@ -162,3 +162,4 @@ Thumbs.db
 *.temp
 temp/
 tmp/
+*.backup

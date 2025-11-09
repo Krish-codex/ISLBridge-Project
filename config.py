@@ -60,7 +60,8 @@ TRANSLATION_CONFIG = {
     "supported_languages": ["hi", "en", "ta", "te", "bn", "gu", "mr", "pa"],
     "tts_enabled": True,
     "tts_rate": 150,
-    "tts_volume": 0.8
+    "tts_volume": 0.8,
+    "tts_mode": "hybrid"  # "offline", "online", or "hybrid" (try online first, fallback to offline)
 }
 
 def get_available_classes():

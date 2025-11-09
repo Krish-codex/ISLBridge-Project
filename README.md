@@ -17,7 +17,7 @@ ISL Bridge provides a technological solution to help DHH individuals communicate
 * **Lightweight AI:** Uses an efficient PyTorch-based LSTM model with only ~340KB size.
 * **Computer Vision:** Powered by MediaPipe Holistic for landmark extraction (166 features: hands, pose, and face).
 * **Desktop App:** A simple and clean GUI built with tkinter.
-* **Multi-Language Support:** Translates to 8 Indian languages (English, Hindi, Tamil, Telugu, Bengali, Gujarati, Marathi, Punjabi) with offline Text-to-Speech using pyttsx3.
+* **Multi-Language Support:** Translates to 8 Indian languages (English, Hindi, Tamil, Telugu, Bengali, Gujarati, Marathi, Punjabi) with hybrid Text-to-Speech using gTTS (online, natural voice) and pyttsx3 (offline fallback).
 * **Optimized Performance:** Frame skipping reduces lag for smooth real-time recognition.
 
 ## 🌟 Key Features
@@ -25,7 +25,7 @@ ISL Bridge provides a technological solution to help DHH individuals communicate
 - **Webcam-Based Recognition**: Real-time gesture capture and analysis
 - **MediaPipe Holistic Integration**: Accurate hand, pose, and face landmark detection
 - **LSTM Deep Learning Model**: Sequential gesture pattern recognition
-- **Offline Operation**: Works without internet (except translation API)
+- **Offline Operation**: Works without internet (except translation API and optional online TTS)
 - **User-Friendly Interface**: Intuitive tkinter-based desktop GUI
 - **Cross-Platform**: Windows, macOS, and Linux compatible
 
@@ -38,7 +38,7 @@ The Deaf and Hard of Hearing (DHH) community in India faces significant communic
 ISL Bridge provides a technological bridge by:
 - **Real-time Translation**: Converts ISL gestures to text instantly
 - **Multi-Language Output**: Supports multiple Indian languages for broader accessibility
-- **Offline Capability**: Works without constant internet (TTS is fully offline)
+- **Offline Capability**: Works without constant internet (TTS supports both online and offline modes)
 - **Lightweight Design**: Runs on standard laptops/desktops without special hardware
 - **User-Friendly**: Simple interface designed for all age groups
 
@@ -260,8 +260,9 @@ The system automatically detects and learns any new gestures you add!
 - **Deep Learning:** PyTorch 2.0+
 - **Computer Vision:** OpenCV, MediaPipe Holistic
 - **GUI Framework:** tkinter (built-in)
-- **Translation:** Google Translate API (googletrans)
-- **Text-to-Speech:** pyttsx3 (offline)
+- **Translation:** deep-translator (Google Translate API)
+- **Text-to-Speech:** Hybrid system with gTTS (online, natural voice) and pyttsx3 (offline fallback)
+- **Audio Processing:** pydub (for audio playback and manipulation)
 - **Data Processing:** NumPy, scikit-learn
 
 ### Language Support
@@ -282,10 +283,23 @@ The system automatically detects and learns any new gestures you add!
 The app includes several optimizations for smooth real-time operation:
 
 1. **Frame Skipping:** AI predictions run every 5th frame instead of every frame, reducing CPU load by 80%
-2. **Thread-Safe TTS:** Text-to-speech uses mutex locks to prevent concurrent execution errors
-3. **Manual Sign Addition:** Users control when to add signs, preventing unwanted auto-additions
-4. **BGR→RGB Conversion:** Optimized to convert once per frame, not multiple times
-5. **Multi-Camera Detection:** Automatically tries camera indices 0, 1, 2 to find real webcam
+2. **Hybrid TTS:** Uses gTTS (online, natural voice) with automatic fallback to pyttsx3 (offline) for reliable audio output
+3. **Thread-Safe TTS:** Text-to-speech uses mutex locks to prevent concurrent execution errors
+4. **Manual Sign Addition:** Users control when to add signs, preventing unwanted auto-additions
+5. **BGR→RGB Conversion:** Optimized to convert once per frame, not multiple times
+6. **Multi-Camera Detection:** Automatically tries camera indices 0, 1, 2 to find real webcam
+
+### TTS Configuration
+
+The text-to-speech system can be configured in `config.py` under `TRANSLATION_CONFIG`:
+
+```python
+"tts_mode": "hybrid"  # Options: "hybrid", "online", "offline"
+```
+
+- **hybrid** (default): Tries gTTS (online, natural-sounding) first, automatically falls back to pyttsx3 (offline) if internet is unavailable
+- **online**: Uses only gTTS (requires internet connection)
+- **offline**: Uses only pyttsx3 (works without internet)
 
 ## 🙏 Credits
 
@@ -300,8 +314,10 @@ The app includes several optimizations for smooth real-time operation:
 * **MediaPipe** by Google - Holistic landmark detection framework
 * **PyTorch** - Deep learning framework for LSTM model
 * **OpenCV** - Computer vision and camera processing library
-* **Google Translate API** - Multi-language translation support
+* **deep-translator** - Multi-language translation support (Google Translate API)
+* **gTTS** - Online text-to-speech with natural voice quality
 * **pyttsx3** - Offline text-to-speech functionality
+* **pydub** - Audio processing and playback
 * **ISL Community** - Gesture datasets and domain knowledge
 
 ### Special Thanks

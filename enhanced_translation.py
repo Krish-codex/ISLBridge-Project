@@ -1,9 +1,12 @@
 """
 Enhanced Translation System for ISL Bridge
+Supports both offline (pyttsx3) and online (gTTS) text-to-speech
 """
 import pyttsx3
 from typing import Optional, Dict, List, Tuple
 import logging
+import tempfile
+import os
 
 try:
     from deep_translator import GoogleTranslator
@@ -13,6 +16,21 @@ except ImportError:
     logging.warning("deep-translator not available. Install with: pip install deep-translator")
 
 try:
+    from gtts import gTTS
+    GTTS_AVAILABLE = True
+except ImportError:
+    GTTS_AVAILABLE = False
+    logging.warning("gTTS not available. Install with: pip install gTTS")
+
+try:
+    from pydub import AudioSegment
+    from pydub.playback import play
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    logging.warning("pydub not available. Install with: pip install pydub")
+
+try:
     from config import TRANSLATION_CONFIG
 except ImportError:
     TRANSLATION_CONFIG = {
@@ -20,20 +38,24 @@ except ImportError:
         "supported_languages": ["en", "hi", "ta", "te", "bn", "gu", "mr", "pa"],
         "tts_enabled": True,
         "tts_rate": 150,
-        "tts_volume": 0.8
+        "tts_volume": 0.8,
+        "tts_mode": "hybrid"  # "offline", "online", or "hybrid" (try online first, fallback to offline)
     }
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MultiLanguageTranslator:
-    """Multi-language translation and text-to-speech system"""
+    """Multi-language translation and text-to-speech system with hybrid TTS support"""
     
     def __init__(self):
         self.tts_engine: Optional[pyttsx3.Engine] = None
         self.google_translator = None
         self.current_language = TRANSLATION_CONFIG.get("default_language", "en")
         self.translation_available = TRANSLATOR_AVAILABLE
+        self.gtts_available = GTTS_AVAILABLE
+        self.pydub_available = PYDUB_AVAILABLE
+        self.tts_mode = TRANSLATION_CONFIG.get("tts_mode", "hybrid")
         
         import threading
         self.tts_lock = threading.Lock()
@@ -245,6 +267,7 @@ class MultiLanguageTranslator:
     def speak_text(self, text: str, language: Optional[str] = None) -> bool:
         """
         Convert text to speech in specified language (non-blocking)
+        Hybrid mode: tries gTTS (online) first for natural voice, falls back to pyttsx3 (offline)
         For letters/numbers, speak the full word name for clarity
         
         Args:
@@ -254,10 +277,6 @@ class MultiLanguageTranslator:
         Returns:
             True if successful, False otherwise
         """
-        if not self.tts_engine:
-            logger.error("TTS engine not available")
-            return False
-        
         try:
             lang = language or self.current_language
             
@@ -270,7 +289,7 @@ class MultiLanguageTranslator:
                     "D": {"en": "Letter D", "hi": "अक्षर डी", "ta": "எழுத்து டி", "te": "అక్షరం డి"},
                     "E": {"en": "Letter E", "hi": "अक्षर ई", "ta": "எழுத்து ஈ", "te": "అక్షరం ఈ"},
                     "0": {"en": "Zero", "hi": "शून्य", "ta": "பூஜ்யம்", "te": "శూన్యం"},
-                    "1": {"en": "One", "hi": "एक", "ta": "ஒன்று", "te": "ఒకటి"},
+                    "1": {"en": "One", "hi": "एक", "ta": "ஒன்று", "te": "ఒకটি"},
                     "2": {"en": "Two", "hi": "दो", "ta": "இரண்டு", "te": "రెండు"},
                     "3": {"en": "Three", "hi": "तीन", "ta": "மூன்று", "te": "మూడు"},
                     "4": {"en": "Four", "hi": "चार", "ta": "நான்கு", "te": "నాలుగు"},
@@ -292,24 +311,147 @@ class MultiLanguageTranslator:
                 logger.debug("TTS already running, skipping this request")
                 return False
             
+            # Determine which TTS method to use
+            use_gtts = False
+            if self.tts_mode == "online" and self.gtts_available:
+                use_gtts = True
+            elif self.tts_mode == "hybrid" and self.gtts_available:
+                use_gtts = True  # Try gTTS first in hybrid mode
+            elif self.tts_mode == "offline":
+                use_gtts = False
+            
+            # Try gTTS first if in online/hybrid mode
+            if use_gtts:
+                success = self._speak_with_gtts(text_to_speak, lang)
+                if success:
+                    return True
+                # If gTTS fails and we're in hybrid mode, fall back to pyttsx3
+                if self.tts_mode == "hybrid":
+                    logger.info("gTTS failed, falling back to pyttsx3")
+                else:
+                    return False
+            
+            # Use pyttsx3 (offline) as fallback or primary method
+            return self._speak_with_pyttsx3(text_to_speak, lang)
+        
+        except Exception as e:
+            logger.error(f"TTS failed: {e}")
+            return False
+    
+    def _speak_with_gtts(self, text: str, language: str) -> bool:
+        """
+        Speak text using gTTS (Google Text-to-Speech) - online, natural voice
+        
+        Args:
+            text: Text to speak
+            language: Language code
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.gtts_available:
+            return False
+        
+        try:
+            # Map language codes to gTTS language codes
+            gtts_lang_map = {
+                "en": "en",
+                "hi": "hi",
+                "ta": "ta",
+                "te": "te",
+                "bn": "bn",
+                "gu": "gu",
+                "mr": "mr",
+                "pa": "pa"
+            }
+            
+            gtts_lang = gtts_lang_map.get(language, "en")
+            
+            # Generate speech using gTTS
+            tts = gTTS(text=text, lang=gtts_lang, slow=False)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+                temp_file = fp.name
+                tts.save(temp_file)
+            
+            # Play the audio file
+            def play_audio():
+                with self.tts_lock:
+                    try:
+                        self.tts_running = True
+                        if self.pydub_available:
+                            # Use pydub for playback (better cross-platform support)
+                            audio = AudioSegment.from_mp3(temp_file)
+                            play(audio)
+                        else:
+                            # Fallback: use platform-specific players
+                            import platform
+                            system = platform.system()
+                            if system == "Windows":
+                                os.system(f'start /min "" "{temp_file}"')
+                            elif system == "Darwin":  # macOS
+                                os.system(f'afplay "{temp_file}"')
+                            else:  # Linux
+                                os.system(f'mpg123 -q "{temp_file}" || ffplay -nodisp -autoexit -hide_banner -loglevel panic "{temp_file}"')
+                        
+                        # Clean up temporary file
+                        try:
+                            import time
+                            time.sleep(0.5)  # Wait for playback to complete
+                            os.unlink(temp_file)
+                        except:
+                            pass
+                    except Exception as e:
+                        logger.error(f"gTTS playback error: {e}")
+                    finally:
+                        self.tts_running = False
+            
+            import threading
+            threading.Thread(target=play_audio, daemon=True).start()
+            logger.info(f"Speaking with gTTS (online): '{text}' in language '{gtts_lang}'")
+            return True
+            
+        except Exception as e:
+            logger.error(f"gTTS error: {e}")
+            return False
+    
+    def _speak_with_pyttsx3(self, text: str, language: str) -> bool:
+        """
+        Speak text using pyttsx3 - offline, system TTS
+        
+        Args:
+            text: Text to speak
+            language: Language code
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.tts_engine:
+            logger.error("pyttsx3 TTS engine not available")
+            return False
+        
+        try:
             def run_tts():
                 with self.tts_lock:
                     try:
                         if self.tts_engine and not self.tts_running:
                             self.tts_running = True
-                            self.tts_engine.say(text_to_speak)
+                            self.tts_engine.say(text)
                             self.tts_engine.runAndWait()
                     except Exception as e:
-                        logger.error(f"TTS thread error: {e}")
+                        logger.error(f"pyttsx3 TTS thread error: {e}")
                     finally:
                         self.tts_running = False
             
             import threading
             threading.Thread(target=run_tts, daemon=True).start()
+            logger.info(f"Speaking with pyttsx3 (offline): '{text}'")
             return True
         
         except Exception as e:
-            logger.error(f"TTS failed: {e}")
+            logger.error(f"pyttsx3 TTS failed: {e}")
             return False
+
 
 TranslationHandler = MultiLanguageTranslator

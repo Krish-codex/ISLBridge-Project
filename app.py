@@ -454,8 +454,8 @@ class ISLBridgeApp:
                         self.root.after(0, lambda: messagebox.showinfo(
                             "Translation Limited",
                             "Online translation service is not available.\n\n"
-                            "Install deep-translator for full multi-language support:\n"
-                            "pip install deep-translator\n\n"
+                            "Install googletrans for full multi-language support:\n"
+                            "pip install googletrans==4.0.0rc1\n\n"
                             "Local gesture translations will still work."
                         ))
                     

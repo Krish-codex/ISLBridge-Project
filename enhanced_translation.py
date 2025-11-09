@@ -9,11 +9,11 @@ import tempfile
 import os
 
 try:
-    from deep_translator import GoogleTranslator
+    from googletrans import Translator
     TRANSLATOR_AVAILABLE = True
 except ImportError:
     TRANSLATOR_AVAILABLE = False
-    logging.warning("deep-translator not available. Install with: pip install deep-translator")
+    logging.warning("googletrans not available. Install with: pip install googletrans==4.0.0rc1")
 
 try:
     from gtts import gTTS
@@ -132,15 +132,14 @@ class MultiLanguageTranslator:
         """Initialize Google Translate if available"""
         if TRANSLATOR_AVAILABLE:
             try:
-                # deep-translator doesn't require initialization
-                # Translator is created per-request
-                logger.info("Translation service (deep-translator) available")
+                # googletrans Translator is created per-request
+                logger.info("Translation service (googletrans) available")
                 self.translation_available = True
             except Exception as e:
                 logger.error(f"Failed to initialize translator: {e}", exc_info=True)
                 self.translation_available = False
         else:
-            logger.warning("Translation service not available. Install deep-translator for multi-language support.")
+            logger.warning("Translation service not available. Install googletrans for multi-language support.")
             self.translation_available = False
     
     def setup_tts(self) -> None:
@@ -202,9 +201,9 @@ class MultiLanguageTranslator:
         # For multi-word gestures, try online translation if available
         if self.translation_available and len(gesture.split()) > 1:
             try:
-                translator = GoogleTranslator(source='en', target=target_lang)
-                translated = translator.translate(gesture)
-                return translated
+                translator = Translator()
+                translated = translator.translate(gesture, src='en', dest=target_lang)
+                return translated.text
             except Exception as e:
                 logger.error(f"Translation service failed: {e}", exc_info=True)
         
@@ -255,9 +254,9 @@ class MultiLanguageTranslator:
         # Try online translation for full sentences
         if self.translation_available:
             try:
-                translator = GoogleTranslator(source='en', target=target_lang)
-                translated = translator.translate(sentence)
-                return translated
+                translator = Translator()
+                translated = translator.translate(sentence, src='en', dest=target_lang)
+                return translated.text
             except Exception as e:
                 logger.error(f"Sentence translation failed: {e}", exc_info=True)
         

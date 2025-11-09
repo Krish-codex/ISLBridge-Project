@@ -260,7 +260,7 @@ The system automatically detects and learns any new gestures you add!
 - **Deep Learning:** PyTorch 2.0+
 - **Computer Vision:** OpenCV, MediaPipe Holistic
 - **GUI Framework:** tkinter (built-in)
-- **Translation:** deep-translator (Google Translate API)
+- **Translation:** googletrans (Google Translate API)
 - **Text-to-Speech:** Hybrid system with gTTS (online, natural voice) and pyttsx3 (offline fallback)
 - **Audio Processing:** pydub (for audio playback and manipulation)
 - **Data Processing:** NumPy, scikit-learn
@@ -314,7 +314,7 @@ The text-to-speech system can be configured in `config.py` under `TRANSLATION_CO
 * **MediaPipe** by Google - Holistic landmark detection framework
 * **PyTorch** - Deep learning framework for LSTM model
 * **OpenCV** - Computer vision and camera processing library
-* **deep-translator** - Multi-language translation support (Google Translate API)
+* **googletrans** - Multi-language translation support (Google Translate API)
 * **gTTS** - Online text-to-speech with natural voice quality
 * **pyttsx3** - Offline text-to-speech functionality
 * **pydub** - Audio processing and playback
@@ -348,3 +348,4 @@ This project is licensed under the **MIT License** - feel free to use and modify
 ---
 
 **⭐ Star this repository if you find it helpful!**
+

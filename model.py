@@ -228,7 +228,7 @@ class ISLModel:
         MODELS_DIR, _, _ = get_config()
         
         if filepath is None:
-            filepath = str(MODELS_DIR / "optimized_isl_model")
+            filepath = str(MODELS_DIR / "isl_trained_model")
         
         torch.save({
             'model_state_dict': self.model.state_dict(),
@@ -256,7 +256,7 @@ class ISLModel:
         MODELS_DIR, _, _ = get_config()
         
         if filepath is None:
-            filepath = str(MODELS_DIR / "optimized_isl_model")
+            filepath = str(MODELS_DIR / "isl_trained_model")
         
         try:
             checkpoint = torch.load(f"{filepath}.pth", map_location=self.device)
@@ -308,7 +308,3 @@ class ISLModel:
             'parameters': float(sum(p.numel() for p in self.model.parameters())),
             'trainable_parameters': float(sum(p.numel() for p in self.model.parameters() if p.requires_grad))
         }
-
-
-def create_model(num_classes: Optional[int] = None) -> ISLModel:
-    return ISLModel(num_classes)

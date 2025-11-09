@@ -2,7 +2,6 @@
 ISL Bridge Configuration
 Central configuration for Indian Sign Language Recognition System
 """
-import os
 from pathlib import Path
 
 # Project structure
@@ -45,13 +44,6 @@ MEDIAPIPE_CONFIG = {
     "min_detection_confidence": 0.5,
     "min_tracking_confidence": 0.5,
     "model_complexity": 1
-}
-
-# Camera settings
-CAMERA_CONFIG = {
-    "width": 640,
-    "height": 480,
-    "fps": 30
 }
 
 # Translation and TTS

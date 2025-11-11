@@ -8,9 +8,7 @@
 
 A desktop application that translates Indian Sign Language gestures into text and speech, helping bridge communication between the DHH community and hearing individuals.A standalone desktop application for real-time Indian Sign Language (ISL) recognition using PyTorch, MediaPipe Holistic, and tkinter. This project aims to bridge the communication gap for the Deaf and Hard of Hearing (DHH) community in India.
 
-
-
----## 🎯 Project Overview
+## 🎯 Project Overview
 
 
 
@@ -1118,3 +1116,4 @@ Special thanks to:
 - ✅ Desktop GUI application
 
 ---
+

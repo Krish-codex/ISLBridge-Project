@@ -21,15 +21,15 @@ FRAMES_DIR.mkdir(exist_ok=True)
 MODEL_CONFIG = {
     "input_frames": 30,
     "input_dim": 166,
-    "hidden_dim": 512,
-    "num_layers": 4,
+    "hidden_dim": 256,
+    "num_layers": 3,
     "lstm_units": 128,
-    "dropout_rate": 0.5,
-    "learning_rate": 0.0001,
-    "batch_size": 32,
-    "epochs": 200,
-    "patience": 25,
-    "confidence_threshold": 0.70,
+    "dropout_rate": 0.3,
+    "learning_rate": 0.0003,
+    "batch_size": 16,
+    "epochs": 150,
+    "patience": 20,
+    "confidence_threshold": 0.60,
     "sequence_length": 30
 }
 

@@ -1,1027 +1,1120 @@
-"""
-ISL Bridge Desktop Application
-"""
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning)
+# 🤟 ISL Bridge - Indian Sign Language Translator
 
-import tkinter as tk
-from tkinter import ttk, messagebox
-import cv2
-import threading
-from PIL import Image, ImageTk
-import numpy as np
-from pathlib import Path
-import logging
 
-from model import ISLModel
-from landmark_extractor import LandmarkExtractor
-from enhanced_translation import MultiLanguageTranslator
-from config import MODEL_CONFIG, APP_CONFIG
-from gpu_utils import cleanup_gpu_memory
-import torch
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+**Real-time ISL recognition using PyTorch, MediaPipe Holistic, and tkinter****An Engineering Clinics Project**
 
-class ISLBridgeApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("🤟 ISL Bridge - Sign Language Translator [RUNNING]")
-        self.root.withdraw()
-        
-        # Configure window properties
-        self.root.configure(bg='#f5f5f5')
-        
-        # Set as a normal window (not always on top)
-        try:
-            self.root.attributes('-toolwindow', False)  # Ensure it's a normal window
-        except:
-            pass
-        
-        # Center window on screen with specific size
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        window_width = 1200
-        window_height = 700
-        x = (screen_width - window_width) // 2
-        y = max(50, (screen_height - window_height) // 2 - 100)  # Position slightly higher
-        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        
-        # Core components
-        self.settings = MODEL_CONFIG
-        self.extractor = None
-        self.recognition_model = None
-        self.model_ready = False
-        self.model_load_lock = threading.Lock()  # Thread-safe model loading
-        self.translator = None
-        self.available_classes = []  # Will be loaded from trained model
-        
-        # Camera
-        self.camera = None
-        self.recording = False
-        
-        # Recognition buffers
-        self.gesture_buffer = []
-        self.previous_sign = ""
-        self.sentence_words = []
-        self.selected_language = "en"
-        
-        # Performance optimization: frame skipping
-        self.frame_counter = 0
-        self.prediction_interval = APP_CONFIG.get("prediction_interval", 5)  # From config
-        
-        # Previous sign tracking with timeout
-        self.last_prediction_time = 0
-        self.prediction_timeout = APP_CONFIG.get("prediction_timeout", 2.0)  # From config
-        
-        # Build interface
-        self.setup_modern_ui()
-        
-        # Load AI model
-        self.load_model_async()
-        
-        # Ensure window is visible after a moment
-        self.root.after(200, self.ensure_window_visible)
-    
-    def ensure_window_visible(self):
-        """Make window visible with smooth transition (no flashing)"""
-        try:
-            # Show the window smoothly
-            self.root.deiconify()  # Make visible
-            self.root.lift()
-            self.root.focus_force()
-            
-            # Play system sound to notify user
-            self.root.bell()
-            
-            # Show a small notification
-            self.root.after(500, self.show_startup_message)
-        except Exception as e:
-            logger.error(f"Window visibility error: {e}", exc_info=True)
-    
-    def show_startup_message(self):
-        """Show startup notification"""
-        try:
-            # Create a temporary label overlay
-            splash = tk.Label(
-                self.root,
-                text="🎉 ISL Bridge is READY!\n\nClick 'Start Camera' to begin",
-                font=('Arial', 16, 'bold'),
-                bg='#2ecc71',
-                fg='white',
-                padx=30,
-                pady=20
-            )
-            splash.place(relx=0.5, rely=0.5, anchor='center')
-            
-            # Remove after 3 seconds
-            self.root.after(3000, splash.destroy)
-        except:
-            pass
-    
-    def setup_modern_ui(self):
-        # Configure style
-        style = ttk.Style()
-        style.theme_use('clam')
-        
-        # Header with gradient effect
-        header = tk.Frame(self.root, bg='#1a252f', height=90)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
-        
-        title_label = tk.Label(
-            header, 
-            text="🤟 ISL Bridge",
-            font=('Segoe UI', 32, 'bold'),
-            bg='#1a252f',
-            fg='#ffffff'
-        )
-        title_label.pack(side=tk.LEFT, padx=40, pady=25)
-        
-        subtitle_label = tk.Label(
-            header,
-            text="Real-Time Sign Language Translation",
-            font=('Segoe UI', 11),
-            bg='#1a252f',
-            fg='#95a5a6'
-        )
-        subtitle_label.pack(side=tk.LEFT, padx=5)
-        
-        # Language and status controls
-        controls = tk.Frame(header, bg='#1a252f')
-        controls.pack(side=tk.RIGHT, padx=40)
-        
-        lang_label = tk.Label(
-            controls,
-            text="Language:",
-            font=('Segoe UI', 10, 'bold'),
-            bg='#1a252f',
-            fg='#ecf0f1'
-        )
-        lang_label.pack(side=tk.LEFT, padx=(0, 8))
-        
-        self.language_var = tk.StringVar(value="en")
-        self.language_combo = ttk.Combobox(
-            controls,
-            textvariable=self.language_var,
-            values=["en", "hi", "ta", "te", "bn", "gu", "mr", "pa"],
-            state="readonly",
-            width=10,
-            font=('Segoe UI', 9)
-        )
-        self.language_combo.pack(side=tk.LEFT, padx=(0, 20))
-        self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
-        
-        self.status_indicator = tk.Label(
-            controls,
-            text="● Ready",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#1a252f',
-            fg='#2ecc71'
-        )
-        self.status_indicator.pack(side=tk.LEFT)
-        
-        # Main content with better layout
-        content_frame = tk.Frame(self.root, bg='#ecf0f1')
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=25, pady=25)
-        
-        # Left: Camera section
-        left_frame = tk.Frame(content_frame, bg='#ecf0f1')
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 15))
-        
-        camera_header = tk.Frame(left_frame, bg='#34495e', height=45)
-        camera_header.pack(fill=tk.X)
-        camera_header.pack_propagate(False)
-        
-        camera_label = tk.Label(
-            camera_header,
-            text="📹  Live Camera Feed",
-            font=('Segoe UI', 13, 'bold'),
-            bg='#34495e',
-            fg='white'
-        )
-        camera_label.pack(side=tk.LEFT, padx=15, pady=10)
-        
-        # Camera display with modern border
-        camera_container = tk.Frame(left_frame, bg='#2c3e50', bd=3, relief=tk.RAISED)
-        camera_container.pack(fill=tk.BOTH, expand=True)
-        
-        self.video_label = tk.Label(
-            camera_container,
-            text="📷\n\nClick 'Start Camera' to begin\n\nPosition your hands in view for sign recognition",
-            font=('Segoe UI', 14),
-            bg='#ffffff',
-            fg='#7f8c8d',
-            justify=tk.CENTER
-        )
-        self.video_label.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        
-        # Camera controls with better spacing
-        controls_frame = tk.Frame(left_frame, bg='#ecf0f1')
-        controls_frame.pack(fill=tk.X, pady=(15, 0))
-        
-        self.start_button = tk.Button(
-            controls_frame,
-            text="🎥 Start Camera",
-            font=('Segoe UI', 13, 'bold'),
-            bg='#27ae60',
-            fg='white',
-            activebackground='#229954',
-            activeforeground='white',
-            relief=tk.FLAT,
-            bd=0,
-            padx=25,
-            pady=12,
-            cursor='hand2',
-            command=self.toggle_camera
-        )
-        self.start_button.pack(side=tk.LEFT, padx=(0, 12))
-        
-        clear_button = tk.Button(
-            controls_frame,
-            text="🗑️ Clear All",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#e74c3c',
-            fg='white',
-            activebackground='#c0392b',
-            activeforeground='white',
-            relief=tk.FLAT,
-            bd=0,
-            padx=20,
-            pady=12,
-            cursor='hand2',
-            command=self.clear_sentence
-        )
-        clear_button.pack(side=tk.LEFT)
-        
-        # Right: Recognition panel with card design
-        right_frame = tk.Frame(content_frame, bg='#ffffff', width=450, relief=tk.RAISED, bd=2)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(0, 0))
-        right_frame.pack_propagate(False)
-        
-        # Prediction section with modern card
-        pred_header = tk.Frame(right_frame, bg='#3498db', height=40)
-        pred_header.pack(fill=tk.X)
-        pred_header.pack_propagate(False)
-        
-        pred_title = tk.Label(
-            pred_header,
-            text="🎯 Current Sign",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#3498db',
-            fg='white'
-        )
-        pred_title.pack(side=tk.LEFT, padx=20, pady=8)
-        
-        pred_card = tk.Frame(right_frame, bg='#ffffff')
-        pred_card.pack(fill=tk.X, padx=20, pady=15)
-        
-        self.prediction_var = tk.StringVar(value="—")
-        self.prediction_label = tk.Label(
-            pred_card,
-            textvariable=self.prediction_var,
-            font=('Segoe UI', 48, 'bold'),
-            bg='#ffffff',
-            fg='#2c3e50',
-            height=2
-        )
-        self.prediction_label.pack()
-        
-        # Store for backward compatibility
-        self.prediction_frame = pred_card
-        
-        # Confidence display
-        conf_frame = tk.Frame(pred_card, bg='#ffffff')
-        conf_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        tk.Label(
-            conf_frame,
-            text="Confidence:",
-            font=('Segoe UI', 10),
-            bg='#ffffff',
-            fg='#7f8c8d'
-        ).pack(side=tk.LEFT, padx=(10, 5))
-        
-        self.confidence_var = tk.StringVar(value="0%")
-        tk.Label(
-            conf_frame,
-            textvariable=self.confidence_var,
-            font=('Segoe UI', 10, 'bold'),
-            bg='#ffffff',
-            fg='#27ae60'
-        ).pack(side=tk.LEFT)
-        
-        # Progress bar
-        self.confidence_bar = ttk.Progressbar(
-            pred_card,
-            mode='determinate',
-            length=400,
-            style='green.Horizontal.TProgressbar'
-        )
-        self.confidence_bar.pack(fill=tk.X, padx=10, pady=(5, 10))
-        
-        # Configure progressbar style
-        style.configure('green.Horizontal.TProgressbar', background='#27ae60', thickness=8)
-        
-        # Message section with card design
-        msg_header = tk.Frame(right_frame, bg='#9b59b6', height=40)
-        msg_header.pack(fill=tk.X, pady=(10, 0))
-        msg_header.pack_propagate(False)
-        
-        msg_title = tk.Label(
-            msg_header,
-            text="📝 Your Message",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#9b59b6',
-            fg='white'
-        )
-        msg_title.pack(side=tk.LEFT, padx=20, pady=8)
-        
-        sentence_container = tk.Frame(right_frame, bg='#f8f9fa', relief=tk.SUNKEN, bd=2)
-        sentence_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 15))
-        
-        self.sentence_text = tk.Text(
-            sentence_container,
-            font=('Segoe UI', 13),
-            bg='#ffffff',
-            fg='#2c3e50',
-            wrap=tk.WORD,
-            relief=tk.FLAT,
-            padx=15,
-            pady=15,
-            height=5,
-            borderwidth=0
-        )
-        self.sentence_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Placeholder
-        self.sentence_text.insert("1.0", "Start signing and click '➕ Add Sign' to build your message...\n\n✨ Tips:\n• Hold signs steady\n• Click Add Sign button\n• Use Auto for instant speech")
-        self.sentence_text.config(fg='#95a5a6')
-        
-        # Bind events to handle placeholder
-        self.sentence_text.bind("<FocusIn>", self.clear_placeholder)
-        self.sentence_text.bind("<FocusOut>", self.restore_placeholder)
-        self.is_placeholder = True
-        
-        # Action buttons - Row 1
-        action_frame1 = tk.Frame(right_frame, bg='#ffffff')
-        action_frame1.pack(fill=tk.X, padx=20, pady=(0, 8))
-        
-        add_sign_button = tk.Button(
-            action_frame1,
-            text="➕ Add Sign",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#27ae60',
-            fg='white',
-            activebackground='#229954',
-            relief=tk.FLAT,
-            bd=0,
-            padx=18,
-            pady=10,
-            cursor='hand2',
-            command=self.add_current_sign_to_sentence
-        )
-        add_sign_button.pack(side=tk.LEFT, padx=(0, 6))
-        
-        space_button = tk.Button(
-            action_frame1,
-            text="⎵ Space",
-            font=('Segoe UI', 11),
-            bg='#34495e',
-            fg='white',
-            activebackground='#2c3e50',
-            relief=tk.FLAT,
-            bd=0,
-            padx=14,
-            pady=10,
-            cursor='hand2',
-            command=self.add_space
-        )
-        space_button.pack(side=tk.LEFT, padx=(0, 6))
-        
-        backspace_button = tk.Button(
-            action_frame1,
-            text="⌫ Delete",
-            font=('Segoe UI', 11),
-            bg='#e67e22',
-            fg='white',
-            activebackground='#d35400',
-            relief=tk.FLAT,
-            bd=0,
-            padx=14,
-            pady=10,
-            cursor='hand2',
-            command=self.backspace
-        )
-        backspace_button.pack(side=tk.LEFT, padx=(0, 6))
-        
-        self.auto_speak_var = tk.BooleanVar(value=False)
-        auto_speak_check = tk.Checkbutton(
-            action_frame1,
-            text="🔊 Auto",
-            variable=self.auto_speak_var,
-            font=('Segoe UI', 10, 'bold'),
-            bg='#ffffff',
-            fg='#2c3e50',
-            selectcolor='#ecf0f1',
-            activebackground='#ffffff',
-            cursor='hand2'
-        )
-        auto_speak_check.pack(side=tk.LEFT, padx=(8, 0))
-        
-        # Action buttons - Row 2
-        action_frame2 = tk.Frame(right_frame, bg='#ffffff')
-        action_frame2.pack(fill=tk.X, padx=20, pady=(0, 8))
-        
-        self.speak_button = tk.Button(
-            action_frame2,
-            text="🔊 SPEAK",
-            font=('Segoe UI', 13, 'bold'),
-            bg='#2ecc71',
-            fg='white',
-            activebackground='#27ae60',
-            relief=tk.FLAT,
-            bd=0,
-            padx=25,
-            pady=12,
-            cursor='hand2',
-            command=self.speak_sentence
-        )
-        self.speak_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        
-        translate_button = tk.Button(
-            action_frame2,
-            text="🌐 Translate",
-            font=('Segoe UI', 11),
-            bg='#9b59b6',
-            fg='white',
-            activebackground='#8e44ad',
-            relief=tk.FLAT,
-            bd=0,
-            padx=18,
-            pady=12,
-            cursor='hand2',
-            command=self.translate_sentence
-        )
-        translate_button.pack(side=tk.LEFT, padx=(0, 0))
-        
-        # Action buttons - Row 3
-        action_frame3 = tk.Frame(right_frame, bg='#ffffff')
-        action_frame3.pack(fill=tk.X, padx=20, pady=(0, 15))
-        
-        copy_button = tk.Button(
-            action_frame3,
-            text="📋 Copy",
-            font=('Segoe UI', 10),
-            bg='#3498db',
-            fg='white',
-            activebackground='#2980b9',
-            relief=tk.FLAT,
-            bd=0,
-            padx=12,
-            pady=8,
-            cursor='hand2',
-            command=self.copy_to_clipboard
-        )
-        copy_button.pack(side=tk.LEFT, padx=(0, 6))
-        
-        save_button = tk.Button(
-            action_frame3,
-            text="💾 Save",
-            font=('Segoe UI', 10),
-            bg='#16a085',
-            fg='white',
-            activebackground='#138d75',
-            relief=tk.FLAT,
-            bd=0,
-            padx=12,
-            pady=8,
-            cursor='hand2',
-            command=self.save_to_file
-        )
-        save_button.pack(side=tk.LEFT, padx=(0, 0))
-        
-        self.speech_status = tk.Label(
-            action_frame3,
-            text="",
-            font=('Segoe UI', 9),
-            bg='#ffffff',
-            fg='#7f8c8d'
-        )
-        self.speech_status.pack(side=tk.LEFT, padx=(15, 0))
-        
-        # Info section
-        info_frame = tk.Frame(right_frame, bg='#e8f5e9', relief=tk.FLAT, bd=1)
-        info_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
-        
-        info_text = "⏳ Loading model...\nSupported classes will appear here."
-        self.info_label = tk.Label(
-            info_frame,
-            text=info_text,
-            font=('Segoe UI', 9),
-            bg='#e8f5e9',
-            fg='#2e7d32',
-            justify=tk.LEFT
-        )
-        self.info_label.pack(padx=12, pady=12)
-    
-    def load_model_async(self):
-        def load():
-            with self.model_load_lock:  # Thread-safe model loading
-                try:
-                    self.root.after(0, lambda: self.status_indicator.config(text="● Loading...", fg='#f39c12'))
-                    
-                    self.extractor = LandmarkExtractor()
-                    self.recognition_model = ISLModel()
-                    self.translator = MultiLanguageTranslator()
-                    
-                    # Notify user if translation is unavailable
-                    if not self.translator.translation_available:
-                        logger.warning("Translation service unavailable. Using local dictionary only.")
-                        self.root.after(0, lambda: messagebox.showinfo(
-                            "Translation Limited",
-                            "Online translation service is not available.\n\n"
-                            "Install googletrans for full multi-language support:\n"
-                            "pip install googletrans==4.0.0rc1\n\n"
-                            "Local gesture translations will still work."
-                        ))
-                    
-                    model_path = Path("models/isl_trained_model.pth")
-                    if not model_path.exists():
-                        self.root.after(0, lambda: messagebox.showerror("Error", 
-                            "No trained model found!\n\nPlease train the model first:\npython train_model.py"))
-                        self.root.after(0, lambda: self.status_indicator.config(text="● No Model", fg='#e74c3c'))
-                        return
-                    
-                    # Validate checkpoint file
-                    try:
-                        # Single canonical load - returns label classes
-                        label_classes = self.recognition_model.load_model("models/isl_trained_model")
-                        
-                        if label_classes:
-                            self.available_classes = label_classes
-                            self.root.after(0, lambda: self.update_info_text())
-                        else:
-                            # Fallback: use config classes
-                            from config import ISL_CLASSES
-                            self.available_classes = ISL_CLASSES
-                            logger.warning("Using fallback classes from config")
-                        
-                        self.model_ready = True
-                        self.root.after(0, lambda: self.status_indicator.config(text="● Ready", fg='#2ecc71'))
-                        logger.info(f"Model loaded successfully with {len(self.available_classes)} classes: {self.available_classes}")
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to load model checkpoint: {e}", exc_info=True)
-                        self.root.after(0, lambda: messagebox.showerror("Error", 
-                            f"Failed to load model checkpoint!\n\nThe model file may be corrupted.\n\n"
-                            f"Error: {str(e)}\n\nPlease retrain the model:\npython train_model.py"))
-                        self.root.after(0, lambda: self.status_indicator.config(text="● Error", fg='#e74c3c'))
-                        
-                except Exception as e:
-                    logger.error(f"Failed to load model: {e}", exc_info=True)
-                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load model: {e}"))
-                    self.root.after(0, lambda: self.status_indicator.config(text="● Error", fg='#e74c3c'))
-        
-        threading.Thread(target=load, daemon=True).start()
-    
-    def update_info_text(self):
-        """Update the info label with dynamically loaded classes"""
-        if not self.available_classes:
-            return
-        
-        # Categorize classes
-        numbers = [c for c in self.available_classes if c.isdigit()]
-        letters = [c for c in self.available_classes if len(c) == 1 and c.isalpha()]
-        words = [c for c in self.available_classes if len(c) > 1]
-        
-        # Build info text
-        parts = []
-        if numbers:
-            parts.append(f"Numbers: {', '.join(sorted(numbers, key=int))}")
-        if letters:
-            # Sort letters to ensure proper range display
-            letters_sorted = sorted(letters)
-            parts.append(f"Letters: {letters_sorted[0]}-{letters_sorted[-1]}")
-        if words:
-            word_preview = ', '.join(words[:5])
-            if len(words) > 5:
-                word_preview += f", +{len(words)-5} more"
-            parts.append(f"Words: {word_preview}")
-        
-        info_text = f"✅ Supports {len(self.available_classes)} gestures:\n"
-        info_text += "\n".join(f"  • {part}" for part in parts)
-        info_text += "\n🌐 Multi-language: English, Hindi, Tamil, Telugu"
-        info_text += "\n⚠️ Hold gesture steady for 2-3 seconds"
-        
-        self.info_label.config(text=info_text)
-    
-    def toggle_camera(self):
-        if not self.recording:
-            self.start_camera()
-        else:
-            self.stop_camera()
-    
-    def start_camera(self):
-        if not self.model_ready:
-            messagebox.showwarning("Warning", "Model is still loading. Please wait...")
-            return
-        
-        try:
-            # Use configurable camera indices
-            camera_indices = APP_CONFIG.get("camera_retry_indices", [1, 2, 0])
-            camera_opened = False
-            
-            for cam_index in camera_indices:
-                logger.info(f"Trying camera index {cam_index}...")
-                self.camera = cv2.VideoCapture(cam_index)
-                
-                if self.camera.isOpened():
-                    # Test if camera actually works by reading a frame
-                    ret, test_frame = self.camera.read()
-                    if ret and test_frame is not None and test_frame.size > 0:
-                        logger.info(f"✓ Camera {cam_index} opened and tested successfully!")
-                        camera_opened = True
-                        break
-                    else:
-                        logger.warning(f"✗ Camera {cam_index} opened but cannot read frames")
-                        self.camera.release()
-                else:
-                    logger.debug(f"✗ Camera {cam_index} not available")
-                    if self.camera:
-                        self.camera.release()
-            
-            if not camera_opened:
-                error_message = (
-                    "Cannot open camera!\n\n"
-                    f"Tried camera indices: {camera_indices}\n\n"
-                    "Troubleshooting:\n"
-                    "1. Check if another app is using the camera\n"
-                    "2. Verify camera permissions are enabled\n"
-                    "3. Ensure camera drivers are installed\n"
-                    "4. Try disconnecting/reconnecting the camera"
-                )
-                messagebox.showerror("Camera Error", error_message)
-                logger.error("Failed to open any camera")
-                return
-            
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            self.recording = True
-            self.start_button.config(text="⏹️ Stop Camera", bg='#e74c3c', activebackground='#c0392b')
-            self.status_indicator.config(text="● Recording", fg='#e74c3c')
-            self.capture_frames()
-            
-        except Exception as e:
-            error_msg = f"Camera error: {str(e)}"
-            messagebox.showerror("Error", error_msg)
-            logger.error(error_msg, exc_info=True)
-    
-    def stop_camera(self):
-        self.recording = False
-        if self.camera:
-            self.camera.release()
-            self.camera = None  # Clear reference for memory cleanup
-        self.start_button.config(text="🎥 Start Camera", bg='#3498db', activebackground='#2980b9')
-        self.status_indicator.config(text="● Ready", fg='#2ecc71')
-        self.video_label.config(image='', text="📷\n\nClick 'Start Camera' to begin\n\nShow your ISL signs here")
-        
-        # Clear video frame reference for memory cleanup
-        if hasattr(self, '_video_image_ref'):
-            self._video_image_ref = None
-        
-        self.gesture_buffer.clear()
-        
-        # GPU memory cleanup using gpu_utils
-        cleanup_gpu_memory()
-    
-    def capture_frames(self):
-        if not self.recording or not self.camera:
-            return
-        
-        try:
-            ret, frame = self.camera.read()  # frame is BGR from OpenCV
-            if ret:
-                # Convert to RGB once here for both display and processing
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Pass RGB frame to display
-                self.display_frame(frame_rgb)
-                
-                # Pass RGB frame to processing (MediaPipe requires RGB)
-                if self.model_ready and self.extractor and self.recognition_model:
-                    self.process_frame(frame_rgb)
-            
-            # Use configurable frame capture interval
-            interval = APP_CONFIG.get("frame_capture_interval", 30)
-            self.root.after(interval, self.capture_frames)
-            
-        except Exception as e:
-            logger.error(f"Frame capture error: {e}", exc_info=True)
-    
-    def display_frame(self, frame_rgb):
-        """Display RGB frame in the video label"""
-        try:
-            # frame_rgb is already RGB, no conversion needed
-            image = Image.fromarray(frame_rgb)
-            photo = ImageTk.PhotoImage(image)
-            self.video_label.config(image=photo, text="")
-            self._video_image_ref = photo  
-        except Exception as e:
-            logger.error(f"Display error: {e}")
-    
-    def process_frame(self, frame_rgb):
-        """Process RGB frame for gesture recognition"""
-        try:
-            if not self.extractor or not self.recognition_model or not self.model_ready:
-                return
-                
-            # Extract landmarks from RGB frame (MediaPipe requires RGB)
-            landmarks = self.extractor.extract_landmarks(frame_rgb)
-            
-            if landmarks is not None:
-                self.gesture_buffer.append(landmarks)
-                
-                seq_length = self.settings.get("sequence_length", 30)
-                if len(self.gesture_buffer) > seq_length:
-                    self.gesture_buffer.pop(0)
-                
-                # Performance optimization: Only predict every Nth frame
-                self.frame_counter += 1
-                if len(self.gesture_buffer) == seq_length and (self.frame_counter % self.prediction_interval == 0):
-                    try:
-                        sequence_array = np.array(self.gesture_buffer).reshape(1, seq_length, -1)
-                        # Increased threshold from 0.55 to 0.75 for better accuracy
-                        result = self.recognition_model.predict_class(sequence_array, threshold=0.75)
-                        
-                        if result and isinstance(result, (tuple, list)) and len(result) >= 2:
-                            predicted_sign, confidence_score = result[0], result[1]
-                            
-                            # More strict filtering: require higher confidence for specific problematic gestures
-                            min_confidence = 0.75
-                            if predicted_sign in ['V', 'K', 'N', 'G']:
-                                # These gestures need even higher confidence due to model bias
-                                min_confidence = 0.85
-                            
-                            if predicted_sign not in ["uncertain", "unknown"] and confidence_score >= min_confidence:
-                                self.update_prediction(predicted_sign, confidence_score)
-                    
-                    except Exception as e:
-                        logger.error(f"Prediction error: {e}", exc_info=True)
-        
-        except Exception as e:
-            logger.error(f"Processing error: {e}", exc_info=True)
-    
-    def update_prediction(self, predicted_sign, confidence_score):
-        """Update prediction display without automatically adding to sentence"""
-        import time
-        current_time = time.time()
-        
-        # Reset previous_sign if enough time has passed (allows re-recognition of same sign)
-        if current_time - self.last_prediction_time > self.prediction_timeout:
-            self.previous_sign = ""
-        
-        if predicted_sign != self.previous_sign and confidence_score > 0.55:
-            self.previous_sign = predicted_sign
-            self.last_prediction_time = current_time
-            self.prediction_var.set(predicted_sign)
-            self.confidence_var.set(f"{float(confidence_score):.0%}")
-            self.confidence_bar['value'] = float(confidence_score) * 100
-    
-    def add_current_sign_to_sentence(self):
-        """Adds the sign currently in the prediction box to the sentence"""
-        sign = self.prediction_var.get()
-        if sign and sign != "—":
-            self.add_to_sentence(sign)
-            self.add_space()  # Automatically add space after adding sign
-            
-            # Auto-speak if enabled
-            if self.auto_speak_var.get():
-                self.speak_single_word(sign)
-    
-    def clear_placeholder(self, event=None):
-        """Clear placeholder text when user focuses on the text widget"""
-        if self.is_placeholder:
-            self.sentence_text.delete("1.0", tk.END)
-            self.sentence_text.config(fg='#2c3e50')  # Normal text color
-            self.is_placeholder = False
-    
-    def restore_placeholder(self, event=None):
-        """Restore placeholder if text widget is empty"""
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        if not current_text:
-            self.sentence_text.delete("1.0", tk.END)
-            self.sentence_text.insert("1.0", "Your message will appear here...\n\n✨ Tips:\n• Hold a sign steady to detect it\n• Click '➕ Add Sign' to add to message\n• Enable '🔊 Auto' for instant speech\n• Use '🔊 SPEAK TEXT' to read full message")
-            self.sentence_text.config(fg='#95a5a6')  # Gray for placeholder
-            self.is_placeholder = True
-    
-    def add_to_sentence(self, sign):
-        # Clear placeholder if present
-        if self.is_placeholder:
-            self.clear_placeholder()
-        
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        
-        if self.translator and hasattr(self.translator, 'translate_gesture'):
-            translated_text = self.translator.translate_gesture(sign, self.selected_language)
-        else:
-            translated_text = sign
-        
-        # Multi-character words (like HELLO, THANK_YOU) get spaces around them
-        # Single characters (letters/numbers) get concatenated directly
-        if len(sign) > 1:  # It's a word, not a letter or digit
-            new_text = current_text + " " + translated_text if current_text else translated_text
-        else:
-            new_text = current_text + translated_text
-        
-        self.sentence_text.delete("1.0", tk.END)
-        self.sentence_text.insert("1.0", new_text)
-    
-    def add_space(self):
-        """Add space to sentence"""
-        if self.is_placeholder:
-            self.clear_placeholder()
-        
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        self.sentence_text.delete("1.0", tk.END)
-        self.sentence_text.insert("1.0", current_text + " ")
-    
-    def backspace(self):
-        """Remove last character"""
-        if self.is_placeholder:
-            return  # Don't modify placeholder
-        
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        if current_text:
-            self.sentence_text.delete("1.0", tk.END)
-            self.sentence_text.insert("1.0", current_text[:-1])
-            
-            # Restore placeholder if text becomes empty
-            if len(current_text[:-1]) == 0:
-                self.restore_placeholder()
-    
-    def safe_speak_text(self, text):
-        try:
-            if self.translator and hasattr(self.translator, 'speak_text'):
-                # Use translate_sentence for full sentences, translate_gesture for single gestures
-                if len(text.split()) > 1:
-                    translated_text = self.translator.translate_sentence(text, self.selected_language)
-                else:
-                    translated_text = self.translator.translate_gesture(text, self.selected_language)
-                self.translator.speak_text(translated_text, self.selected_language)
-        except Exception as e:
-            logger.error(f"TTS error: {e}", exc_info=True)
-    
-    def _do_speak(self, text):
-        self.safe_speak_text(text)
-    
-    def on_language_change(self, event=None):
-        new_lang = self.language_var.get()
-        self.selected_language = new_lang
-        
-        if self.translator and hasattr(self.translator, 'set_language'):
-            self.translator.set_language(new_lang)
-        
-        if self.sentence_text:
-            current_text = self.sentence_text.get("1.0", tk.END).strip()
-            if current_text and self.translator:
-                translated_sentence = self.translator.translate_sentence(current_text, new_lang)
-                self.sentence_text.delete("1.0", tk.END)
-                self.sentence_text.insert("1.0", translated_sentence)
-    
-    def speak_sentence(self):
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        text_to_speak = current_text if current_text else "No text to speak"
-        
-        # Visual feedback
-        self.speak_button.config(bg='#f39c12', text='🔊 SPEAKING...')
-        self.speech_status.config(text="🗣️ Speaking...", fg='#f39c12')
-        
-        def speak_and_reset():
-            self.safe_speak_text(text_to_speak)
-            # Reset button after 2 seconds
-            import time
-            time.sleep(2)
-            self.root.after(0, lambda: self.speak_button.config(bg='#2ecc71', text='🔊 SPEAK TEXT'))
-            self.root.after(0, lambda: self.speech_status.config(text="✅ Done", fg='#27ae60'))
-            self.root.after(2000, lambda: self.speech_status.config(text=""))
-        
-        import threading
-        threading.Thread(target=speak_and_reset, daemon=True).start()
-    
-    def speak_single_word(self, word: str):
-        """Speak a single word/sign (used for auto-speak)"""
-        self.speech_status.config(text=f"🗣️ {word}", fg='#3498db')
-        
-        def speak_and_clear():
-            self.safe_speak_text(word)
-            import time
-            time.sleep(1)
-            self.root.after(0, lambda: self.speech_status.config(text=""))
-        
-        import threading
-        threading.Thread(target=speak_and_clear, daemon=True).start()
-    
-    def copy_to_clipboard(self):
-        """Copy message text to clipboard"""
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        if current_text:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(current_text)
-            self.speech_status.config(text="📋 Copied!", fg='#3498db')
-            self.root.after(2000, lambda: self.speech_status.config(text=""))
-        else:
-            self.speech_status.config(text="⚠️ No text to copy", fg='#e74c3c')
-            self.root.after(2000, lambda: self.speech_status.config(text=""))
-    
-    def save_to_file(self):
-        """Save message text to file"""
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        if not current_text:
-            self.speech_status.config(text="⚠️ No text to save", fg='#e74c3c')
-            self.root.after(2000, lambda: self.speech_status.config(text=""))
-            return
-        
-        try:
-            from tkinter import filedialog
-            from datetime import datetime
-            
-            default_name = f"ISL_Message_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            filepath = filedialog.asksaveasfilename(
-                defaultextension=".txt",
-                initialfile=default_name,
-                filetypes=[
-                    ("Text files", "*.txt"),
-                    ("All files", "*.*")
-                ]
-            )
-            
-            if filepath:
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(current_text)
-                self.speech_status.config(text="💾 Saved!", fg='#16a085')
-                self.root.after(2000, lambda: self.speech_status.config(text=""))
-                logger.info(f"Message saved to {filepath}")
-        except Exception as e:
-            logger.error(f"Save error: {e}")
-            self.speech_status.config(text="❌ Save failed", fg='#e74c3c')
-            self.root.after(2000, lambda: self.speech_status.config(text=""))
-    
-    def translate_sentence(self):
-        if self.is_placeholder:
-            return  # Don't translate placeholder
-        
-        current_text = self.sentence_text.get("1.0", tk.END).strip()
-        if current_text and self.translator and hasattr(self.translator, 'translate_sentence'):
-            translated = self.translator.translate_sentence(current_text, self.selected_language)
-            self.sentence_text.delete("1.0", tk.END)
-            self.sentence_text.insert("1.0", translated)
-            self.speech_status.config(text=f"🌐 Translated to {self.selected_language.upper()}", fg='#9b59b6')
-            self.root.after(2000, lambda: self.speech_status.config(text=""))
-    
-    def clear_sentence(self):
-        self.sentence_text.delete("1.0", tk.END)
-        self.restore_placeholder()  # Show placeholder after clearing
-        self.prediction_var.set("—")
-        self.confidence_var.set("0%")
-        self.confidence_bar['value'] = 0
-        self.previous_sign = ""
-        self.gesture_buffer.clear()
-    
-    def on_closing(self):
-        """Handle app closing with proper resource cleanup"""
-        try:
-            self.stop_camera()
-            
-            # Cleanup MediaPipe resources
-            if self.extractor:
-                try:
-                    self.extractor.close()
-                    logger.info("MediaPipe resources cleaned up")
-                except Exception as e:
-                    logger.warning(f"Error closing extractor: {e}")
-            
-            # GPU memory cleanup using gpu_utils
-            cleanup_gpu_memory()
-            logger.info("GPU memory cleared")
-            
-            self.root.destroy()
-            logger.info("Application closed successfully")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}", exc_info=True)
-            self.root.destroy()
 
-def main():
-    """Main entry point"""
-    root = tk.Tk()
-    app = ISLBridgeApp(root)
-    root.protocol("WM_DELETE_WINDOW", app.on_closing)
-    root.mainloop()
 
-if __name__ == "__main__":
-    main()
+A desktop application that translates Indian Sign Language gestures into text and speech, helping bridge communication between the DHH community and hearing individuals.A standalone desktop application for real-time Indian Sign Language (ISL) recognition using PyTorch, MediaPipe Holistic, and tkinter. This project aims to bridge the communication gap for the Deaf and Hard of Hearing (DHH) community in India.
+
+
+
+---## 🎯 Project Overview
+
+
+
+## ✨ FeaturesISL Bridge provides a technological solution to help DHH individuals communicate effectively with the hearing community by translating ISL gestures in real-time using computer vision and deep learning.
+
+
+
+- **Real-time Recognition:** Webcam-based gesture translation with MediaPipe Holistic## ✨ What It Does
+
+- **Expandable Dataset:** Add new gestures by creating folders - no code changes needed
+
+- **Multi-Language Support:** 8 Indian languages (English, Hindi, Tamil, Telugu, Bengali, Gujarati, Marathi, Punjabi)* **Real-time Recognition:** Translates ISL gestures from your webcam into text.
+
+- **Hybrid Text-to-Speech:** gTTS (online) with pyttsx3 (offline) fallback* **Dynamic Gesture Support:** Automatically recognizes any gestures you add to the dataset - no code changes needed!
+
+- **GPU Acceleration:** 6-10x faster training with NVIDIA GPU* **Currently Trained:** 36 gestures (A-Z alphabet + 0-9 numbers)
+
+- **Lightweight:** ~340KB LSTM model with 166 landmark features* **Expandable:** Add folders for new gestures (HELLO, THANK_YOU, etc.) and retrain
+
+- **Offline-First:** Works without internet (except translation and online TTS)* **Lightweight AI:** Uses an efficient PyTorch-based LSTM model with only ~340KB size.
+
+* **Computer Vision:** Powered by MediaPipe Holistic for landmark extraction (166 features: hands, pose, and face).
+
+---* **Desktop App:** A simple and clean GUI built with tkinter.
+
+* **Multi-Language Support:** Translates to 8 Indian languages (English, Hindi, Tamil, Telugu, Bengali, Gujarati, Marathi, Punjabi) with hybrid Text-to-Speech using gTTS (online, natural voice) and pyttsx3 (offline fallback).
+
+## 🚀 Quick Start* **Optimized Performance:** Frame skipping reduces lag for smooth real-time recognition.
+
+
+
+### 1. Setup Environment## 🌟 Key Features
+
+
+
+```bash- **Webcam-Based Recognition**: Real-time gesture capture and analysis
+
+# Clone repository- **MediaPipe Holistic Integration**: Accurate hand, pose, and face landmark detection
+
+git clone <your-repo-url>- **LSTM Deep Learning Model**: Sequential gesture pattern recognition
+
+cd ISLBridge-Project- **Offline Operation**: Works without internet (except translation API and optional online TTS)
+
+- **User-Friendly Interface**: Intuitive tkinter-based desktop GUI
+
+# Create virtual environment- **Cross-Platform**: Windows, macOS, and Linux compatible
+
+python -m venv .venv
+
+## 🎯 Project Scope & Impact
+
+# Activate (Windows)
+
+.venv\Scripts\activate### Problem Statement
+
+The Deaf and Hard of Hearing (DHH) community in India faces significant communication barriers when interacting with the hearing population. Traditional methods like interpreters are not always available, creating challenges in education, healthcare, and daily communication.
+
+# Install dependencies
+
+pip install -r requirements.txt### Our Solution
+
+```ISL Bridge provides a technological bridge by:
+
+- **Real-time Translation**: Converts ISL gestures to text instantly
+
+### 2. Prepare Dataset- **Multi-Language Output**: Supports multiple Indian languages for broader accessibility
+
+- **Offline Capability**: Works without constant internet (TTS supports both online and offline modes)
+
+Create this folder structure:- **Lightweight Design**: Runs on standard laptops/desktops without special hardware
+
+- **User-Friendly**: Simple interface designed for all age groups
+
+```
+
+data/raw/Frames_Word_Level/### Target Audience
+
+├── A/- DHH individuals using Indian Sign Language
+
+│   ├── A1.jpg- Educational institutions
+
+│   └── A_video.mp4- Healthcare facilities
+
+├── B/- Government service centers
+
+│   ├── B1.jpg- Family members learning to communicate with DHH relatives
+
+│   └── B_video.mp4
+
+├── HELLO/---
+
+    └── HELLO_1.jpg
+
+```## 🚀 Quick Start (3 Steps!)
+
+
+
+**Supported Formats:**### **Step 1: Setup**
+
+- Images: `.jpg`, `.png`
+
+- Videos: `.mp4`, `.avi`, `.mov` (auto-extracts ~30 frames)1.  Clone this repository.
+
+2.  Create a virtual environment:
+
+The system automatically detects any folders you add!    ```bash
+
+    python -m venv .venv
+
+### 3. Train & Run    ```
+
+3.  Activate it (Windows):
+
+```bash    ```bash
+
+# Train model (auto-uses GPU if available)    .venv\Scripts\activate
+
+python train_model.py    ```
+
+4.  Install all required libraries:
+
+# Run application    ```bash
+
+python app.py    pip install -r requirements.txt
+
+# OR double-click: run_isl_bridge.bat    ```
+
+```
+
+### **Step 2: Get a Dataset**
+
+---
+
+ISL Bridge supports **both images and videos** for training:
+
+## ⚡ GPU Acceleration (Optional)
+
+1.  Create the following folder structure:
+
+### Quick GPU Setup    ```
+
+    data/raw/Frames_Word_Level/
+
+```powershell    ├── A/
+
+# 1. Check GPU    │   ├── A1.jpg
+
+nvidia-smi    │   ├── A2.jpg
+
+    │   └── A_video1.mp4
+
+# 2. Install PyTorch with CUDA    ├── B/
+
+pip uninstall torch torchvision torchaudio -y    │   ├── B1.jpg
+
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121    │   └── B_video.mp4
+
+    └── HELLO/
+
+# 3. Verify        ├── HELLO_1.jpg
+
+python verify_gpu.py        ├── HELLO_2.png
+
+```        └── HELLO_video.mp4
+
+    ```
+
+### Performance
+
+2.  **Supported formats:**
+
+| Operation | CPU | GPU (RTX 3050) | Speedup |    - **Images:** `.jpg`, `.png` - For static gestures
+
+|-----------|-----|----------------|---------|    - **Videos:** `.mp4`, `.avi`, `.mov` - For dynamic gestures (system auto-extracts ~30 frames)
+
+| Training | 45-60 min | 5-10 min | **6-10x** |
+
+| Inference | 50-80 ms | 8-15 ms | **5-7x** |3.  Populate these folders with your data. The system automatically detects any folders you add - no need to edit `config.py`!
+
+
+
+**Note:** GPU is auto-detected - no code changes needed!**Note:** Videos are automatically processed - the system extracts approximately 30 frames uniformly from each video file.
+
+
+
+---### **Step 3: Train & Run**
+
+
+
+## 📁 Project Structure1.  **Train the model:**
+
+    ```bash
+
+```    python train_model.py
+
+ISLBridge-Project/    ```
+
+├── app.py                      # Main desktop application    This will process images and videos, extract landmarks, train the LSTM, and save the final model to `models/isl_trained_model.pth`.
+
+├── train_model.py              # Model training script    
+
+├── model.py                    # LSTM model definition    **GPU Acceleration (RECOMMENDED):**
+
+├── landmark_extractor.py       # MediaPipe landmark extraction    - **6-10x faster training** with NVIDIA GPU
+
+├── enhanced_translation.py     # Multi-language translation & TTS    - See [GPU Setup Guide](#-gpu-acceleration-setup) below
+
+├── config.py                   # Configuration settings    - Your system: `RTX 3050 6GB` detected ✅
+
+├── gpu_utils.py                # GPU optimization utilities
+
+├── verify_gpu.py               # GPU testing tool2.  **Run the application:**
+
+├── requirements.txt            # Python dependencies    ```bash
+
+├── run_isl_bridge.bat          # Quick launch script    python app.py
+
+├── data/    ```
+
+│   └── raw/    ...or double-click the `run_isl_bridge.bat` file.
+
+│       ├── processed_dataset.json
+
+│       └── Frames_Word_Level/  # Your gesture folders---
+
+├── models/
+
+│   └── isl_trained_model.pth   # Trained model## ⚡ GPU Acceleration Setup
+
+└── logs/
+
+    ├── training_plots/### Why Use GPU?
+
+    └── evaluation_results.json- **Training:** 6-10x faster (5-10 min instead of 45-60 min)
+
+```- **Inference:** 5-7x faster real-time recognition
+
+- **Recommended:** Any NVIDIA GPU with 4GB+ VRAM
+
+---
+
+### Your System
+
+## 🎮 GUI Features✅ **GPU Detected:** NVIDIA GeForce RTX 3050 6GB Laptop GPU  
+
+✅ **Drivers:** v581.32 with CUDA 13.0  
+
+- **Camera Controls:** Start/Stop camera with live feed
+
+- **Sign Recognition:** Real-time gesture detection with confidence display### Quick Setup (3 commands)
+
+- **Message Builder:** Add signs, spaces, delete characters
+
+- **Auto-Speak:** Instant speech output (toggle on/off)```powershell
+
+- **Translation:** Convert to selected Indian language# 1. Check your GPU
+
+- **Export:** Copy to clipboard or save to filenvidia-smi
+
+
+
+---# 2. Install PyTorch with CUDA support
+
+pip uninstall torch torchvision torchaudio -y
+
+## 🔧 Configurationpip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+
+
+Edit `config.py` to customize:# 3. Verify GPU is working
+
+python verify_gpu.py
+
+```python```
+
+MODEL_CONFIG = {
+
+    "input_size": 166,       # MediaPipe landmarks### Expected Output
+
+    "hidden_size": 128,      # LSTM hidden units```
+
+    "num_layers": 2,         # LSTM layers✓ CUDA Available: True
+
+    "sequence_length": 30,   # Frames per gesture✓ GPU Name: NVIDIA GeForce RTX 3050 6GB Laptop GPU
+
+}✓ GPU Memory: 6.00 GB
+
+🚀 GPU Speedup: 8-15x faster!
+
+GPU_CONFIG = {```
+
+    "enable_gpu": True,              # Auto-use GPU
+
+    "enable_mixed_precision": True,  # FP16 for 2x speedup### Performance Comparison
+
+}
+
+```| Operation | CPU | GPU (RTX 3050) | Speedup |
+
+|-----------|-----|----------------|---------|
+
+---| Training (100 epochs) | 45-60 min | 5-10 min | **6-10x** ⚡ |
+
+| Per-epoch | 30-40 sec | 3-5 sec | **8-10x** ⚡ |
+
+## 📊 Model Details| Inference | 50-80 ms | 8-15 ms | **5-7x** ⚡ |
+
+
+
+- **Architecture:** 2-layer LSTM (166 → 128 → 128 → Classes)**Note:** Your code automatically detects and uses GPU if available - no code changes needed!
+
+- **Input:** 166 MediaPipe landmarks (21 × 2 hands + 33 pose + 468 face)
+
+- **Training:** Class-balanced dataset (1500 samples/class), data augmentation### GPU Features Included
+
+- **Optimization:** Adam optimizer, learning rate: 0.0005, dropout: 0.3
+
+✅ **Automatic Device Selection**
+
+---- Code automatically detects GPU/CPU
+
+- No manual configuration needed
+
+## 🛠️ Troubleshooting- Seamless fallback to CPU if no GPU
+
+
+
+### Camera Issues✅ **Mixed Precision Training (FP16)**
+
+```bash- 2x additional speedup on GPU
+
+# Test camera- Reduces memory usage
+
+python -c "import cv2; print('Camera:', cv2.VideoCapture(0).isOpened())"- Maintains model accuracy
+
+```
+
+✅ **Smart Memory Management**
+
+### Model Not Loading- Automatic GPU memory cleanup
+
+```bash- Prevents memory leaks
+
+# Check if model exists- Optimized batch sizes
+
+dir models\isl_trained_model.pth
+
+✅ **Performance Monitoring**
+
+# Retrain if needed- Real-time GPU memory tracking
+
+python train_model.py- Training speed benchmarks
+
+```- Detailed device information
+
+
+
+### GPU Not Detected### GPU Configuration
+
+```bash
+
+# Verify CUDA installationAll GPU settings are in `config.py` under `GPU_CONFIG`:
+
+python verify_gpu.py
+
+```python
+
+# Reinstall PyTorch with CUDAGPU_CONFIG = {
+
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121    "enable_gpu": True,              # Auto-use GPU if available
+
+```    "enable_mixed_precision": True,  # FP16 for 2x speedup
+
+    "enable_cudnn_benchmark": True,  # Optimize algorithms
+
+### Low Accuracy    "gpu_memory_fraction": 0.8,      # Use max 80% GPU memory
+
+- Ensure good lighting and hand visibility    "num_workers": 4,                # DataLoader workers
+
+- Hold gestures steady for 1-2 seconds    "pin_memory": True,              # Fast GPU transfer
+
+- Add more training samples per gesture (500-1500 recommended)}
+
+- Check confidence score (aim for >70%)```
+
+
+
+---**Adjusting for your GPU:**
+
+- If you get "Out of Memory" errors, reduce `batch_size` to 16 or 8
+
+## 📦 Dependencies- If training is slow, check `nvidia-smi` for GPU usage
+
+- For 4GB GPUs, set `gpu_memory_fraction: 0.6`
+
+Core libraries:
+
+- **PyTorch** (2.0+): Deep learning frameworkFor detailed setup and troubleshooting, see: [`GPU_SETUP_GUIDE.md`](GPU_SETUP_GUIDE.md)
+
+- **MediaPipe** (0.10+): Landmark extraction
+
+- **OpenCV** (4.8+): Video capture---
+
+- **NumPy**: Numerical operations
+
+- **tkinter**: GUI (pre-installed with Python)## � Data Format & Training
+
+- **gTTS/pyttsx3**: Text-to-speech
+
+- **googletrans**: Translation### Supported Data Types
+
+
+
+For GPU:ISL Bridge training script automatically handles:
+
+- **CUDA Toolkit** (12.1+)
+
+- **cuDNN** (8.9+)✅ **Images** (`.jpg`, `.png`):
+
+- **NVIDIA Drivers** (latest)- Best for: Static gesture poses
+
+- Processing: Direct landmark extraction from each image
+
+Install all: `pip install -r requirements.txt`- Use case: Alphabet letters, numbers, static words
+
+
+
+---✅ **Videos** (`.mp4`, `.avi`, `.mov`):
+
+- Best for: Dynamic gestures, continuous movements
+
+## 📝 Adding New Gestures- Processing: Extracts ~30 frames uniformly from each video
+
+- Use case: Action words, phrases, sentences
+
+1. Create folder: `data/raw/Frames_Word_Level/NEW_GESTURE/`
+
+2. Add images/videos to folder### Training Process
+
+3. Retrain: `python train_model.py`
+
+4. Done! The gesture is now recognized automaticallyThe LSTM model is trained on **sequences** of landmarks:
+
+1. **From Images:** Creates 30-frame sequences with synthetic noise for data augmentation
+
+---2. **From Videos:** Extracts real 30-frame sequences from video files
+
+3. **Mixed Data:** Can train on both images and videos simultaneously!
+
+## 🔍 Advanced Usage
+
+**Recommendation:** For best real-world performance, include video data in your training set, as it better represents the dynamic nature of sign language.
+
+### Analyze Dataset
+
+```bash---
+
+python analyze_dataset.py
+
+# Shows: classes, samples per class, statistics## 📖 How to Use the App
+
+```
+
+**Note:** This app now includes performance optimizations with frame skipping and manual sign addition control.
+
+### Custom Training Parameters
+
+Edit `config.py` under `MODEL_CONFIG`:1.  **Start Camera:** Click the "🎥 Start Camera" button to turn on your webcam.
+
+- Adjust `sequence_length` for longer/shorter gestures2.  **Show a Sign:** Hold your hand clearly in view. The "Current Sign" box will update as you sign (predictions run every 5 frames for smooth performance).
+
+- Increase `hidden_size` for more complex patterns3.  **➕ Add Sign:** When the correct sign is shown, click the green **"➕ Add Sign"** button. This adds the recognized word to your sentence and automatically adds a space.
+
+- Modify `learning_rate` for training stability4.  **Space:** Click the **"Space"** button if you need to add an extra space manually.
+
+5.  **⌫ Backspace:** Click to remove the last character from your message.
+
+---6.  **🗑️ Clear:** Click to clear the entire message.
+
+7.  **Language Selection:** Choose your target language from the dropdown (Hindi, Tamil, Telugu, Bengali, Gujarati, Marathi, Punjabi, or English).
+
+## 📄 License8.  **🔊 Speak:** Click to hear the translation spoken aloud.
+
+
+
+This project is an Engineering Clinics initiative aimed at improving accessibility for the Deaf and Hard of Hearing community in India.**Workflow Example:**
+
+- Show sign "H" → Click "Add Sign" → Show "E" → Click "Add Sign" → Show "L" → Click "Add Sign" → Show "L" → Click "Add Sign" → Show "O" → Click "Add Sign"
+
+---- Result: "H E L L O " in your message box
+
+
+
+## 🤝 Contributing---
+
+
+
+Contributions welcome! Focus areas:## 📁 Project Files
+
+- Adding more ISL gestures to dataset
+
+- Improving recognition accuracy### Core Application Files
+
+- Optimizing performance* **`app.py`** (39.4 KB) - Main tkinter desktop application
+
+- UI/UX enhancements  - Real-time webcam capture and processing
+
+- Multi-platform testing  - Gesture recognition with frame skipping optimization
+
+  - Multi-language translation interface
+
+---  - GPU memory management
+
+  
+
+## 🎯 Project Goals* **`model.py`** (13.4 KB) - PyTorch LSTM model
+
+  - GestureRecognitionLSTM architecture (2-layer LSTM)
+
+**Primary:** Bridge communication gap for DHH community in India    - Automatic GPU/CPU detection
+
+**Technical:** Real-time, accurate ISL recognition with minimal latency    - Mixed precision inference support
+
+**Social Impact:** Accessible technology for education, healthcare, and daily communication  - Class weight balancing for better accuracy
+
+
+
+---* **`landmark_extractor.py`** (8.2 KB) - MediaPipe integration
+
+  - Extracts 166 features per frame (hands, pose, face)
+
+## 📞 Support  - Optimized for real-time processing
+
+  - Handles missing landmarks gracefully
+
+For issues or questions:
+
+1. Check troubleshooting section above* **`config.py`** (3.8 KB) - Central configuration
+
+2. Review logs in `logs/` directory  - Dynamic gesture class detection
+
+3. Test GPU with `verify_gpu.py`  - Model hyperparameters
+
+4. Verify camera with OpenCV test command  - GPU configuration settings
+
+  - Translation and TTS settings
+
+---  - All paths and constants
+
+
+
+**Made with ❤️ for the DHH Community**### Training & Data Processing
+
+* **`train_model.py`** (22.5 KB) - Unified training script
+  - **GPU-optimized training** (6-10x faster with NVIDIA GPU)
+  - Processes both images and videos
+  - Class balancing (max 1500 samples/class)
+  - Data augmentation with noise
+  - Automatic checkpoint saving
+  - Generates training plots and confusion matrix
+  - Mixed precision training (FP16) support
+
+### GPU & Performance Utilities
+* **`gpu_utils.py`** (7.0 KB) - GPU management utilities
+  - Automatic device detection (GPU/CPU)
+  - GPU memory monitoring and cleanup
+  - Mixed precision support checking
+  - Optimal batch size calculation
+  - Performance benchmarking tools
+  - cuDNN and TF32 optimization
+
+* **`verify_gpu.py`** (3.3 KB) - GPU verification tool
+  - Tests CUDA availability
+  - Benchmarks GPU vs CPU performance
+  - Verifies mixed precision support
+  - Displays GPU properties and memory
+
+### Translation & Audio
+* **`enhanced_translation.py`** (20.8 KB) - Multi-language support
+  - Hybrid TTS system (gTTS + pyttsx3)
+  - Thread-safe audio playback
+  - 8 Indian languages supported
+  - Automatic online/offline fallback
+
+### Analysis & Tools
+* **`analyze_dataset.py`** (4.4 KB) - Dataset analysis
+  - Shows gesture class distribution
+  - Counts samples per class
+  - Identifies low-data classes
+  - Visualizes dataset statistics
+
+### Launchers & Config
+* **`run_isl_bridge.bat`** - Windows launcher (double-click to run)
+* **`requirements.txt`** - Python dependencies with CUDA instructions
+* **`README.md`** - This comprehensive guide
+* **`GPU_SETUP_GUIDE.md`** - Detailed GPU setup instructions
+* **`UPGRADE_SUMMARY.md`** - Technical upgrade details
+
+### Data Directories
+* **`data/raw/`** - Place your training images and videos here
+  - `Frames_Word_Level/` - Gesture folders (A-Z, 0-9, custom words)
+  - `processed_dataset.json` - Cached processed features
+  
+* **`models/`** - Trained model storage
+  - `isl_trained_model.pth` - Final trained model (~340KB)
+  - `training_checkpoint.pth` - Temporary checkpoint (auto-deleted)
+  
+* **`logs/`** - Training logs and visualizations
+  - `evaluation_results.json` - Accuracy metrics
+  - `training_plots/` - Loss and accuracy graphs, confusion matrix
+  
+* **`exports/`** - Exported translations and recordings
+
+---
+
+## 🆘 Troubleshooting
+
+### Camera Issues
+
+* **"Camera shows a static image / tutorial screen"**
+  - Your computer has a virtual camera (like BYOM). The app automatically tries camera indices 0, 1, and 2. It should find your real webcam. If it doesn't, check the terminal output to see which camera opened successfully.
+  
+* **"Camera feed is laggy"**
+  - The app uses frame skipping (predicts every 5 frames) to reduce lag. You can adjust `prediction_interval` in `config.py` under `APP_CONFIG`.
+  - Lower = more responsive but slower, Higher = faster but less responsive.
+  - Close other camera applications that might be using the webcam.
+
+* **"Camera not detected"**
+  - Ensure webcam is connected and enabled in device manager
+  - Try running: `python -c "import cv2; print(cv2.VideoCapture(0).isOpened())"`
+  - Check camera permissions in Windows settings
+
+### Model & Training Issues
+
+* **"No model found" Error**
+  - You must run `python train_model.py` first to create the `isl_trained_model.pth` file.
+  - Check that `models/` directory exists and is not empty.
+
+* **"Predictions are inaccurate"**
+  - **For Image-only training:** Static images are less effective than videos. Consider adding video data to your dataset for better accuracy.
+  - **Solution:** Add `.mp4`/`.avi`/`.mov` files to your gesture folders and retrain. Videos capture the dynamic nature of sign language better than static images.
+  - **Recommended:** Mix of 20-50% videos with images for optimal performance.
+  - Ensure good lighting and clear hand visibility during recognition.
+  - Model requires at least 20-30 samples per gesture class for good accuracy.
+
+* **"Training is very slow"**
+  - **Best solution:** Use GPU acceleration (see GPU Setup section above)
+  - With GPU: Training takes 5-10 minutes
+  - Without GPU: Training takes 45-60 minutes
+  - Reduce `max_samples_per_class` in `config.py` to speed up training
+
+* **"Out of Memory during training"**
+  - **If using GPU:** Reduce batch size in `config.py`: `"batch_size": 16` or `8`
+  - Reduce `max_samples_per_class` to `1000` instead of `1500`
+  - Close other GPU-intensive applications
+  - If using CPU: Close background applications to free RAM
+
+### GPU Issues
+
+* **"CUDA not available" after PyTorch installation**
+  - Restart your terminal/IDE
+  - Verify installation: `python -c "import torch; print(torch.cuda.is_available())"`
+  - Reinstall PyTorch with CUDA:
+    ```powershell
+    pip uninstall torch torchvision torchaudio -y
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    ```
+  - Run `python verify_gpu.py` for detailed diagnostics
+
+* **"GPU Out of Memory"**
+  - Reduce batch size: Edit `config.py` → `"batch_size": 16` or `8`
+  - Reduce samples: `"max_samples_per_class": 1000`
+  - Lower GPU memory fraction: `"gpu_memory_fraction": 0.6`
+  - Close other GPU applications (games, video editing software)
+
+* **"Training slower than expected with GPU"**
+  - Check if GPU is actually being used: Run `nvidia-smi -l 1` in another terminal
+  - Ensure laptop is plugged in (not on battery saver mode)
+  - Check for thermal throttling (keep laptop well-ventilated)
+  - Background apps might be using GPU - close unnecessary programs
+
+### Application Performance
+
+* **"App is slow or freezing"**
+  - Close other camera applications
+  - Ensure good lighting (less processing needed)
+  - Check if your CPU is overloaded (Task Manager)
+  - Adjust `prediction_interval` to higher value (e.g., 10) in `config.py`
+
+* **"Signs are being added automatically!"**
+  - This has been fixed! You now need to manually click the "➕ Add Sign" button to add recognized signs to your sentence.
+
+* **"Text-to-Speech not working"**
+  - **Online mode (gTTS):** Requires internet connection
+  - **Offline mode (pyttsx3):** Should work without internet
+  - Check TTS mode in `config.py`: `"tts_mode": "hybrid"` for automatic fallback
+  - Verify audio output device is connected and not muted
+
+### Dataset Issues
+
+* **"No data loaded! Please check your dataset"**
+  - Ensure `data/raw/Frames_Word_Level/` exists
+  - Check that gesture folders (A, B, C, etc.) contain image/video files
+  - Verify file formats: `.jpg`, `.png`, `.mp4`, `.avi`, `.mov`
+  - Run `python analyze_dataset.py` to check dataset structure
+
+* **"Class X has very few samples"**
+  - Add more images/videos for that gesture (aim for 20-50 per class)
+  - Training will still work but accuracy may be lower for under-represented classes
+
+### Installation Issues
+
+* **"ModuleNotFoundError: No module named X"**
+  - Ensure virtual environment is activated: `.venv\Scripts\activate`
+  - Reinstall requirements: `pip install -r requirements.txt`
+  - For GPU support: See GPU Setup section
+
+* **"ImportError: DLL load failed"**
+  - Install Visual C++ Redistributable from Microsoft
+  - Reinstall PyTorch: `pip install torch --force-reinstall`
+
+### Getting Help
+
+If you encounter issues not listed here:
+
+1. **Check logs:** Look at terminal output for error messages
+2. **Run diagnostics:**
+   - `python verify_gpu.py` - Test GPU setup
+   - `python analyze_dataset.py` - Check dataset
+3. **GitHub Issues:** Report bugs on the repository issues page
+
+---
+
+## 📊 Technical Details
+
+### Model Architecture
+* **Type:** 2-Layer LSTM (Long Short-Term Memory) neural network
+* **Framework:** PyTorch
+* **Size:** ~340KB (lightweight and portable)
+* **Input:** Sequential landmark data (30 frames @ 166 features per frame)
+* **Output:** Dynamic gesture classes (currently 36: A-Z + 0-9) with confidence scores
+
+### Feature Extraction (MediaPipe Holistic)
+* **Total Features:** 166 landmarks per frame
+  - **Left hand:** 21 landmarks (x, y, z) = 63 features
+  - **Right hand:** 21 landmarks (x, y, z) = 63 features  
+  - **Pose:** 8 keypoints (x, y, z) = 24 features
+  - **Face:** 16 keypoints (x, y) = 16 features
+  - **Total:** 166 features per frame
+
+### Recognition System
+* **Sequence Length:** 30 frames (~1 second at 30 FPS)
+* **Current Gesture Classes:** 36 (automatically detected from dataset)
+  - **Alphabets:** A-Z (26 letters)
+  - **Numbers:** 0-9 (10 digits)
+  - **Words:** Expandable - add any word by creating a folder in the dataset!
+* **Performance:** Predicts every 5 frames (80% CPU reduction)
+* **Confidence Threshold:** 55% minimum for recognition (optimized for real-time webcam use)
+
+### 🎯 Adding New Gestures (No Code Changes Required!)
+
+Want to add HELLO, THANK_YOU, or any custom gesture?
+
+1. **Create a folder** in `data/raw/Frames_Word_Level/YOUR_GESTURE/`
+2. **Add data** (20-50 samples recommended):
+   - Images: `.jpg`, `.png` files
+   - Videos: `.mp4`, `.avi`, `.mov` files
+   - Or mix both!
+3. **Retrain**: `python train_model.py`
+4. **Run app**: `python app.py`
+
+The system automatically detects and learns any new gestures you add!
+
+**Pro Tip:** For dynamic gestures (actions, phrases), use videos for better accuracy!
+
+
+
+### Software Stack
+- **Programming Language:** Python 3.8+
+- **Deep Learning:** PyTorch 2.0+
+- **Computer Vision:** OpenCV, MediaPipe Holistic
+- **GUI Framework:** tkinter (built-in)
+- **Translation:** googletrans (Google Translate API)
+- **Text-to-Speech:** Hybrid system with gTTS (online, natural voice) and pyttsx3 (offline fallback)
+- **Audio Processing:** pydub (for audio playback and manipulation)
+- **Data Processing:** NumPy, scikit-learn
+
+### Language Support
+**Primary Languages (as per project scope):**
+- English (en)
+- Hindi (hi)  
+- Tamil (ta)
+
+**Extended Support (implementation):**
+- Telugu (te)
+- Bengali (bn)
+- Gujarati (gu)
+- Marathi (mr)
+- Punjabi (pa)
+
+## ⚡ Performance Optimizations
+
+The app includes several optimizations for smooth real-time operation:
+
+1. **Frame Skipping:** AI predictions run every 5th frame instead of every frame, reducing CPU load by 80%
+2. **Hybrid TTS:** Uses gTTS (online, natural voice) with automatic fallback to pyttsx3 (offline) for reliable audio output
+3. **Thread-Safe TTS:** Text-to-speech uses mutex locks to prevent concurrent execution errors
+4. **Manual Sign Addition:** Users control when to add signs, preventing unwanted auto-additions
+5. **BGR→RGB Conversion:** Optimized to convert once per frame, not multiple times
+6. **Multi-Camera Detection:** Automatically tries camera indices 0, 1, 2 to find real webcam
+
+### TTS Configuration
+
+The text-to-speech system can be configured in `config.py` under `TRANSLATION_CONFIG`:
+
+```python
+"tts_mode": "hybrid"  # Options: "hybrid", "online", "offline"
+```
+
+- **hybrid** (default): Tries gTTS (online, natural-sounding) first, automatically falls back to pyttsx3 (offline) if internet is unavailable
+- **online**: Uses only gTTS (requires internet connection)
+- **offline**: Uses only pyttsx3 (works without internet)
+
+## 🙏 Credits
+
+### Development Team
+* **Ishika Sehgal** - Team Leader, UI Developer
+* **Krish Nagpal** - Team Member, Developer, Project Lead 
+* **Jiya Choudhary** - Team Member, Documentation Specialist
+* **Isha Patial** - Team Member, Dataset Curator
+* **Project:** Engineering Clinics Course Project
+
+### Technologies & Frameworks
+* **MediaPipe** by Google - Holistic landmark detection framework
+* **PyTorch** - Deep learning framework for LSTM model
+* **OpenCV** - Computer vision and camera processing library
+* **googletrans** - Multi-language translation support (Google Translate API)
+* **gTTS** - Online text-to-speech with natural voice quality
+* **pyttsx3** - Offline text-to-speech functionality
+* **pydub** - Audio processing and playback
+* **ISL Community** - Gesture datasets and domain knowledge
+
+### Special Thanks
+* Engineering Clinics faculty and instructors
+* Indian Sign Language research community
+* Open-source contributors
+
+---
+
+## 📝 License
+
+This project is licensed under the **MIT License** - feel free to use and modify!
+
+---
+
+## 🎓 Project Information
+
+**Course:** Engineering Clinics  
+**Project:** ISL Bridge - Indian Sign Language Translator  
+**Timeline:** October 2025  
+**Objective:** Bridge communication gap for DHH community in India  
+**Team:** Krish Nagpal, Jiya Choudhary, Ishika Sehgal, Isha Patial
+
+**ISL Bridge** - Making sign language communication accessible to everyone! 🤟
+
+**Repository:** [ISLBridge-Project](https://github.com/Krish-codex/ISLBridge-Project)
+
+---
+
+**⭐ Star this repository if you find it helpful!**
+
+---
+
+## 📚 Complete Feature List
+
+### Core Functionality
+✅ Real-time ISL gesture recognition from webcam  
+✅ 36+ gesture classes (A-Z, 0-9, custom words)  
+✅ Sequential pattern analysis (30-frame LSTM)  
+✅ Confidence-based filtering (55-85% thresholds)  
+✅ Manual sentence building with "Add Sign" button  
+✅ Multi-language translation (8 Indian languages)  
+✅ Hybrid text-to-speech (online + offline)  
+
+### GPU Acceleration ⚡
+✅ Automatic GPU/CPU detection  
+✅ 6-10x faster training with NVIDIA GPU  
+✅ Mixed precision (FP16) for 2x additional speedup  
+✅ cuDNN optimization for faster convolutions  
+✅ Smart memory management and cleanup  
+✅ Real-time performance monitoring  
+
+### Training System
+✅ Supports images (.jpg, .png) and videos (.mp4, .avi, .mov)  
+✅ Automatic video frame extraction (~30 frames/video)  
+✅ Class balancing (max 1500 samples/class)  
+✅ Data augmentation with synthetic noise  
+✅ Stratified train/val/test splits (70/10/20)  
+✅ Comprehensive evaluation metrics  
+✅ Training plots and confusion matrices  
+✅ Automatic model checkpointing  
+
+### Performance Optimizations
+✅ Frame skipping (predict every 5th frame)  
+✅ Prediction caching and timeout  
+✅ Multi-camera detection (indices 0, 1, 2)  
+✅ Thread-safe TTS with mutex locks  
+✅ GPU memory auto-cleanup  
+✅ Efficient batch processing  
+
+### Utilities & Tools
+✅ `verify_gpu.py` - GPU testing and benchmarks  
+✅ `gpu_utils.py` - Centralized GPU management  
+✅ `analyze_dataset.py` - Dataset analysis tool  
+✅ `GPU_SETUP_GUIDE.md` - Complete GPU setup docs  
+✅ `UPGRADE_SUMMARY.md` - Technical upgrade details  
+
+---
+
+## 🎯 Quick Command Reference
+
+```powershell
+# Setup
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+# GPU Setup (Recommended)
+nvidia-smi  # Check GPU
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+python verify_gpu.py  # Verify GPU works
+
+# Training
+python train_model.py  # Train model (5-10 min with GPU, 45-60 min CPU)
+
+# Run Application  
+python app.py  # Launch GUI
+# OR
+run_isl_bridge.bat  # Windows launcher
+
+# Analysis
+python analyze_dataset.py  # Check dataset structure
+
+# GPU Monitoring (during training)
+nvidia-smi -l 1  # Real-time GPU usage (updates every second)
+```
+
+---
+
+## 📊 Performance Benchmarks
+
+### Training Performance (100 epochs, 53K samples)
+
+| Hardware | Time | Per Epoch | Speedup |
+|----------|------|-----------|---------|
+| **CPU** (i5-8250U) | 45-60 min | 30-40 sec | Baseline |
+| **GPU** (RTX 3050 6GB) | 5-10 min | 3-5 sec | **6-10x** ⚡ |
+| **GPU** (RTX 4060 8GB) | 3-5 min | 2-3 sec | **12-15x** ⚡ |
+
+### Inference Performance (per frame)
+
+| Hardware | Latency | FPS | Speedup |
+|----------|---------|-----|---------|
+| **CPU** (i5-8250U) | 50-80 ms | 12-20 FPS | Baseline |
+| **GPU** (RTX 3050) | 8-15 ms | 65-125 FPS | **5-7x** ⚡ |
+| **GPU** (RTX 4060) | 5-10 ms | 100-200 FPS | **8-12x** ⚡ |
+
+### Memory Usage
+
+| Component | CPU Mode | GPU Mode |
+|-----------|----------|----------|
+| **Model Size** | 340 KB | 340 KB |
+| **System RAM** | 2-3 GB | 1-2 GB |
+| **GPU VRAM** | N/A | 500-800 MB |
+| **Storage** | 2 GB | 5 GB (with CUDA) |
+
+---
+
+## 🔧 Advanced Configuration
+
+### Adjusting GPU Memory (config.py)
+
+```python
+GPU_CONFIG = {
+    "gpu_memory_fraction": 0.8,  # Use 80% of GPU memory
+    # For 4GB GPUs: set to 0.6
+    # For 6GB GPUs: set to 0.8
+    # For 8GB+ GPUs: set to 0.9
+}
+```
+
+### Adjusting Batch Size
+
+```python
+TRAINING_CONFIG = {
+    "batch_size": 32,  # Default
+    # For OOM errors: try 16 or 8
+    # For fast GPUs: try 64 or 128
+}
+```
+
+### Adjusting Frame Prediction Rate
+
+```python
+APP_CONFIG = {
+    "prediction_interval": 5,  # Predict every 5th frame
+    # Lower (3): More responsive, higher CPU
+    # Higher (10): Faster, less responsive
+}
+```
+
+### Adjusting Confidence Thresholds (model.py)
+
+```python
+# Line ~290 in model.py
+if confidence_score < 0.55:  # Base threshold
+    return "—", 0.0
+
+# For stricter filtering: increase to 0.65 or 0.70
+# For more lenient: decrease to 0.45 or 0.50
+```
+
+---
+
+## 🌐 Extending to New Gestures
+
+### Example: Adding "HELLO" Gesture
+
+1. **Create folder:**
+   ```
+   data/raw/Frames_Word_Level/HELLO/
+   ```
+
+2. **Add data** (20-50 samples recommended):
+   ```
+   HELLO/
+   ├── hello_1.jpg
+   ├── hello_2.jpg
+   ├── hello_video1.mp4
+   ├── hello_video2.mp4
+   └── ...
+   ```
+
+3. **Train:**
+   ```powershell
+   python train_model.py
+   ```
+
+4. **Use in app:**
+   - Model automatically recognizes "HELLO"
+   - No code changes needed!
+
+### Best Practices for Custom Gestures
+
+✅ **Use Videos**: Better for dynamic gestures  
+✅ **Mix Data**: Combine images + videos  
+✅ **Sufficient Samples**: 20-50 per gesture minimum  
+✅ **Good Lighting**: Consistent across all samples  
+✅ **Clear Hands**: Ensure hands are visible  
+✅ **Varied Angles**: Multiple perspectives  
+✅ **Natural Speed**: Perform gestures at normal pace  
+
+---
+
+## 📞 Support & Contribution
+
+### Getting Help
+- 📧 **Issues**: [GitHub Issues](https://github.com/Krish-codex/ISLBridge-Project/issues)
+- 📖 **Documentation**: See README.md, GPU_SETUP_GUIDE.md, UPGRADE_SUMMARY.md
+- 🔧 **Diagnostics**: Run `python verify_gpu.py` and `python analyze_dataset.py`
+
+### Contributing
+Contributions are welcome! Areas for improvement:
+- Additional gesture datasets
+- Improved model architectures
+- Better UI/UX designs
+- Multi-platform testing
+- Documentation improvements
+- Bug fixes and optimizations
+
+### Acknowledgments
+Special thanks to:
+- Engineering Clinics course faculty
+- Indian Sign Language community
+- MediaPipe and PyTorch teams
+- Open-source community
+
+---
+
+## 📜 Version History
+
+### v2.0 (November 2025) - GPU Acceleration Update
+- ✅ GPU support with automatic detection
+- ✅ Mixed precision training (FP16)
+- ✅ 6-10x training speedup
+- ✅ Consolidated training scripts
+- ✅ Centralized GPU utilities
+- ✅ Comprehensive documentation
+
+### v1.0 (October 2025) - Initial Release
+- ✅ Real-time ISL recognition
+- ✅ 36 gesture classes (A-Z, 0-9)
+- ✅ Multi-language translation
+- ✅ Hybrid TTS system
+- ✅ Desktop GUI application
+
+---

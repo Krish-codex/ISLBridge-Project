@@ -1,5 +1,6 @@
 """
-ISL Model Training Script
+ISL Model Training Script - Unified Version
+Combines all training features: GPU optimization, class balancing, data augmentation
 """
 import os
 import cv2
@@ -12,10 +13,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
+import torch
 
 from model import ISLModel
 from landmark_extractor import LandmarkExtractor
-from config import RAW_DATA_DIR, MODELS_DIR, LOGS_DIR, ISL_CLASSES, TRAINING_CONFIG
+from config import RAW_DATA_DIR, MODELS_DIR, LOGS_DIR, ISL_CLASSES, TRAINING_CONFIG, MODEL_CONFIG
+from gpu_utils import print_device_info, optimize_device, get_training_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -470,8 +473,13 @@ class ISLTrainer:
         plt.show()
 
 def main():
-    """Main training function"""
+    """Main training function with GPU optimization"""
     logger.info("🤟 ISL Bridge - Model Training Started")
+    
+    # Display GPU/CPU info
+    device_info = print_device_info()
+    device = optimize_device()
+    training_config = get_training_config()
     
     MODELS_DIR.mkdir(exist_ok=True)
     LOGS_DIR.mkdir(exist_ok=True)
@@ -505,7 +513,10 @@ def main():
     
     data_splits = trainer.prepare_data(features, labels)
     
-    history = trainer.train_model(data_splits, epochs=100)
+    # Use epochs from config
+    epochs = MODEL_CONFIG.get('epochs', 100)
+    logger.info(f"Training for {epochs} epochs (from config)")
+    history = trainer.train_model(data_splits, epochs=epochs)
     
     eval_results = trainer.evaluate_model(data_splits)
     

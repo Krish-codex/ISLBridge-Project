@@ -17,6 +17,7 @@ from model import ISLModel
 from landmark_extractor import LandmarkExtractor
 from enhanced_translation import MultiLanguageTranslator
 from config import MODEL_CONFIG, APP_CONFIG
+from gpu_utils import cleanup_gpu_memory
 import torch
 
 # Configure logging
@@ -35,10 +36,7 @@ class ISLBridgeApp:
         # Configure window properties
         self.root.configure(bg='#f5f5f5')
         
-        # Make window always on top and prominent
-        self.root.attributes('-topmost', True)
-        
-        # Set as a tool window to make it independent
+        # Set as a normal window (not always on top)
         try:
             self.root.attributes('-toolwindow', False)  # Ensure it's a normal window
         except:
@@ -96,7 +94,6 @@ class ISLBridgeApp:
             self.root.deiconify()  # Make visible
             self.root.lift()
             self.root.focus_force()
-            self.root.attributes('-topmost', True)
             
             # Play system sound to notify user
             self.root.bell()
@@ -127,316 +124,410 @@ class ISLBridgeApp:
             pass
     
     def setup_modern_ui(self):
-        # Header section
-        header = tk.Frame(self.root, bg='#2c3e50', height=80)
+        # Configure style
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Header with gradient effect
+        header = tk.Frame(self.root, bg='#1a252f', height=90)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         
         title_label = tk.Label(
             header, 
             text="🤟 ISL Bridge",
-            font=('Arial', 28, 'bold'),
-            bg='#2c3e50',
-            fg='white'
+            font=('Segoe UI', 32, 'bold'),
+            bg='#1a252f',
+            fg='#ffffff'
         )
-        title_label.pack(side=tk.LEFT, padx=30, pady=20)
+        title_label.pack(side=tk.LEFT, padx=40, pady=25)
         
         subtitle_label = tk.Label(
             header,
-            text="Indian Sign Language Translator",
-            font=('Arial', 12),
-            bg='#2c3e50',
-            fg='#ecf0f1'
+            text="Real-Time Sign Language Translation",
+            font=('Segoe UI', 11),
+            bg='#1a252f',
+            fg='#95a5a6'
         )
-        subtitle_label.pack(side=tk.LEFT, padx=10)
+        subtitle_label.pack(side=tk.LEFT, padx=5)
         
-        # Language selector and status
-        controls = tk.Frame(header, bg='#2c3e50')
-        controls.pack(side=tk.RIGHT, padx=30)
+        # Language and status controls
+        controls = tk.Frame(header, bg='#1a252f')
+        controls.pack(side=tk.RIGHT, padx=40)
         
-        # Language selection
         lang_label = tk.Label(
             controls,
             text="Language:",
-            font=('Arial', 10),
-            bg='#2c3e50',
+            font=('Segoe UI', 10, 'bold'),
+            bg='#1a252f',
             fg='#ecf0f1'
         )
-        lang_label.pack(side=tk.LEFT, padx=(0, 5))
+        lang_label.pack(side=tk.LEFT, padx=(0, 8))
         
         self.language_var = tk.StringVar(value="en")
         self.language_combo = ttk.Combobox(
             controls,
             textvariable=self.language_var,
-            values=["en", "hi", "ta", "te"],
+            values=["en", "hi", "ta", "te", "bn", "gu", "mr", "pa"],
             state="readonly",
-            width=8,
-            font=('Arial', 9)
+            width=10,
+            font=('Segoe UI', 9)
         )
-        self.language_combo.pack(side=tk.LEFT, padx=(0, 15))
+        self.language_combo.pack(side=tk.LEFT, padx=(0, 20))
         self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
         
         self.status_indicator = tk.Label(
             controls,
             text="● Ready",
-            font=('Arial', 12, 'bold'),
-            bg='#2c3e50',
+            font=('Segoe UI', 12, 'bold'),
+            bg='#1a252f',
             fg='#2ecc71'
         )
-        self.status_indicator.pack(side=tk.LEFT, padx=(0, 15))
+        self.status_indicator.pack(side=tk.LEFT)
         
-        # Always on top toggle
-        self.always_on_top_var = tk.BooleanVar(value=True)
-        always_on_top_check = tk.Checkbutton(
-            controls,
-            text="📌 Always on Top",
-            variable=self.always_on_top_var,
-            command=self.toggle_always_on_top,
-            font=('Arial', 9),
-            bg='#2c3e50',
-            fg='#ecf0f1',
-            selectcolor='#34495e',
-            activebackground='#2c3e50',
-            activeforeground='#ecf0f1'
-        )
-        always_on_top_check.pack(side=tk.LEFT)
+        # Main content with better layout
+        content_frame = tk.Frame(self.root, bg='#ecf0f1')
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=25, pady=25)
         
-        # Main content area
-        content_frame = tk.Frame(self.root, bg='#f5f5f5')
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # Left: Camera section
+        left_frame = tk.Frame(content_frame, bg='#ecf0f1')
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 15))
         
-        # Left: Camera feed
-        left_frame = tk.Frame(content_frame, bg='#f5f5f5')
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        camera_header = tk.Frame(left_frame, bg='#34495e', height=45)
+        camera_header.pack(fill=tk.X)
+        camera_header.pack_propagate(False)
         
         camera_label = tk.Label(
-            left_frame,
-            text="📹 Camera Feed",
-            font=('Arial', 14, 'bold'),
-            bg='#f5f5f5',
-            fg='#2c3e50'
+            camera_header,
+            text="📹  Live Camera Feed",
+            font=('Segoe UI', 13, 'bold'),
+            bg='#34495e',
+            fg='white'
         )
-        camera_label.pack(anchor=tk.W, pady=(0, 10))
+        camera_label.pack(side=tk.LEFT, padx=15, pady=10)
         
-        # Camera display with border
-        camera_container = tk.Frame(left_frame, bg='#34495e', bd=2, relief=tk.SOLID)
+        # Camera display with modern border
+        camera_container = tk.Frame(left_frame, bg='#2c3e50', bd=3, relief=tk.RAISED)
         camera_container.pack(fill=tk.BOTH, expand=True)
         
         self.video_label = tk.Label(
             camera_container,
-            text="📷\n\nClick 'Start Camera' to begin\n\nShow your ISL signs here",
-            font=('Arial', 16),
-            bg='#ecf0f1',
-            fg='#7f8c8d'
+            text="📷\n\nClick 'Start Camera' to begin\n\nPosition your hands in view for sign recognition",
+            font=('Segoe UI', 14),
+            bg='#ffffff',
+            fg='#7f8c8d',
+            justify=tk.CENTER
         )
-        self.video_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.video_label.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         
-        # Camera controls
-        controls_frame = tk.Frame(left_frame, bg='#f5f5f5')
-        controls_frame.pack(fill=tk.X, pady=(10, 0))
+        # Camera controls with better spacing
+        controls_frame = tk.Frame(left_frame, bg='#ecf0f1')
+        controls_frame.pack(fill=tk.X, pady=(15, 0))
         
         self.start_button = tk.Button(
             controls_frame,
             text="🎥 Start Camera",
-            font=('Arial', 12, 'bold'),
-            bg='#3498db',
+            font=('Segoe UI', 13, 'bold'),
+            bg='#27ae60',
             fg='white',
-            activebackground='#2980b9',
+            activebackground='#229954',
             activeforeground='white',
             relief=tk.FLAT,
-            padx=20,
-            pady=10,
+            bd=0,
+            padx=25,
+            pady=12,
             cursor='hand2',
             command=self.toggle_camera
         )
-        self.start_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.start_button.pack(side=tk.LEFT, padx=(0, 12))
         
         clear_button = tk.Button(
             controls_frame,
-            text="🗑️ Clear",
-            font=('Arial', 12),
-            bg='#95a5a6',
+            text="🗑️ Clear All",
+            font=('Segoe UI', 12, 'bold'),
+            bg='#e74c3c',
             fg='white',
-            activebackground='#7f8c8d',
+            activebackground='#c0392b',
             activeforeground='white',
             relief=tk.FLAT,
-            padx=15,
-            pady=10,
+            bd=0,
+            padx=20,
+            pady=12,
             cursor='hand2',
             command=self.clear_sentence
         )
         clear_button.pack(side=tk.LEFT)
         
-        # Right: Results panel
-        right_frame = tk.Frame(content_frame, bg='white', width=400, relief=tk.RAISED, bd=1)
-        right_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        # Right: Recognition panel with card design
+        right_frame = tk.Frame(content_frame, bg='#ffffff', width=450, relief=tk.RAISED, bd=2)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(0, 0))
         right_frame.pack_propagate(False)
         
-        # Current sign
-        result_label = tk.Label(
-            right_frame,
-            text="Current Sign",
-            font=('Arial', 12, 'bold'),
-            bg='white',
-            fg='#2c3e50'
-        )
-        result_label.pack(anchor=tk.W, padx=20, pady=(20, 5))
+        # Prediction section with modern card
+        pred_header = tk.Frame(right_frame, bg='#3498db', height=40)
+        pred_header.pack(fill=tk.X)
+        pred_header.pack_propagate(False)
         
-        self.prediction_frame = tk.Frame(right_frame, bg='#ecf0f1', height=100)
-        self.prediction_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
-        self.prediction_frame.pack_propagate(False)
+        pred_title = tk.Label(
+            pred_header,
+            text="🎯 Current Sign",
+            font=('Segoe UI', 12, 'bold'),
+            bg='#3498db',
+            fg='white'
+        )
+        pred_title.pack(side=tk.LEFT, padx=20, pady=8)
+        
+        pred_card = tk.Frame(right_frame, bg='#ffffff')
+        pred_card.pack(fill=tk.X, padx=20, pady=15)
         
         self.prediction_var = tk.StringVar(value="—")
         self.prediction_label = tk.Label(
-            self.prediction_frame,
+            pred_card,
             textvariable=self.prediction_var,
-            font=('Arial', 48, 'bold'),
-            bg='#ecf0f1',
-            fg='#2c3e50'
+            font=('Segoe UI', 48, 'bold'),
+            bg='#ffffff',
+            fg='#2c3e50',
+            height=2
         )
-        self.prediction_label.pack(expand=True)
+        self.prediction_label.pack()
         
-        # Confidence
-        confidence_label = tk.Label(
-            right_frame,
-            text="Confidence",
-            font=('Arial', 11),
-            bg='white',
+        # Store for backward compatibility
+        self.prediction_frame = pred_card
+        
+        # Confidence display
+        conf_frame = tk.Frame(pred_card, bg='#ffffff')
+        conf_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        tk.Label(
+            conf_frame,
+            text="Confidence:",
+            font=('Segoe UI', 10),
+            bg='#ffffff',
             fg='#7f8c8d'
-        )
-        confidence_label.pack(anchor=tk.W, padx=20)
+        ).pack(side=tk.LEFT, padx=(10, 5))
         
         self.confidence_var = tk.StringVar(value="0%")
-        confidence_value = tk.Label(
-            right_frame,
+        tk.Label(
+            conf_frame,
             textvariable=self.confidence_var,
-            font=('Arial', 16, 'bold'),
-            bg='white',
+            font=('Segoe UI', 10, 'bold'),
+            bg='#ffffff',
             fg='#27ae60'
-        )
-        confidence_value.pack(anchor=tk.W, padx=20, pady=(0, 10))
+        ).pack(side=tk.LEFT)
         
+        # Progress bar
         self.confidence_bar = ttk.Progressbar(
-            right_frame,
+            pred_card,
             mode='determinate',
-            length=360
+            length=400,
+            style='green.Horizontal.TProgressbar'
         )
-        self.confidence_bar.pack(padx=20, pady=(0, 20))
+        self.confidence_bar.pack(fill=tk.X, padx=10, pady=(5, 10))
         
-        # Sentence builder
-        sentence_label = tk.Label(
-            right_frame,
+        # Configure progressbar style
+        style.configure('green.Horizontal.TProgressbar', background='#27ae60', thickness=8)
+        
+        # Message section with card design
+        msg_header = tk.Frame(right_frame, bg='#9b59b6', height=40)
+        msg_header.pack(fill=tk.X, pady=(10, 0))
+        msg_header.pack_propagate(False)
+        
+        msg_title = tk.Label(
+            msg_header,
             text="📝 Your Message",
-            font=('Arial', 12, 'bold'),
-            bg='white',
-            fg='#2c3e50'
+            font=('Segoe UI', 12, 'bold'),
+            bg='#9b59b6',
+            fg='white'
         )
-        sentence_label.pack(anchor=tk.W, padx=20, pady=(10, 5))
+        msg_title.pack(side=tk.LEFT, padx=20, pady=8)
         
-        sentence_container = tk.Frame(right_frame, bg='#f8f9fa', relief=tk.SUNKEN, bd=1)
-        sentence_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        sentence_container = tk.Frame(right_frame, bg='#f8f9fa', relief=tk.SUNKEN, bd=2)
+        sentence_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 15))
         
         self.sentence_text = tk.Text(
             sentence_container,
-            font=('Arial', 14),
-            bg='#f8f9fa',
+            font=('Segoe UI', 13),
+            bg='#ffffff',
             fg='#2c3e50',
             wrap=tk.WORD,
             relief=tk.FLAT,
-            padx=10,
-            pady=10
+            padx=15,
+            pady=15,
+            height=5,
+            borderwidth=0
         )
         self.sentence_text.pack(fill=tk.BOTH, expand=True)
         
-        # Action buttons
-        action_frame = tk.Frame(right_frame, bg='white')
-        action_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        # Placeholder
+        self.sentence_text.insert("1.0", "Start signing and click '➕ Add Sign' to build your message...\n\n✨ Tips:\n• Hold signs steady\n• Click Add Sign button\n• Use Auto for instant speech")
+        self.sentence_text.config(fg='#95a5a6')
         
-        # Add Sign button (new - for manual control)
+        # Bind events to handle placeholder
+        self.sentence_text.bind("<FocusIn>", self.clear_placeholder)
+        self.sentence_text.bind("<FocusOut>", self.restore_placeholder)
+        self.is_placeholder = True
+        
+        # Action buttons - Row 1
+        action_frame1 = tk.Frame(right_frame, bg='#ffffff')
+        action_frame1.pack(fill=tk.X, padx=20, pady=(0, 8))
+        
         add_sign_button = tk.Button(
-            action_frame,
+            action_frame1,
             text="➕ Add Sign",
-            font=('Arial', 10, 'bold'),
-            bg='#27ae60',  # Green to stand out
+            font=('Segoe UI', 12, 'bold'),
+            bg='#27ae60',
             fg='white',
+            activebackground='#229954',
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
+            bd=0,
+            padx=18,
+            pady=10,
             cursor='hand2',
             command=self.add_current_sign_to_sentence
         )
-        add_sign_button.pack(side=tk.LEFT, padx=(0, 5))
+        add_sign_button.pack(side=tk.LEFT, padx=(0, 6))
         
         space_button = tk.Button(
-            action_frame,
-            text="Space",
-            font=('Arial', 10),
+            action_frame1,
+            text="⎵ Space",
+            font=('Segoe UI', 11),
             bg='#34495e',
             fg='white',
+            activebackground='#2c3e50',
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
+            bd=0,
+            padx=14,
+            pady=10,
             cursor='hand2',
             command=self.add_space
         )
-        space_button.pack(side=tk.LEFT, padx=(0, 5))
+        space_button.pack(side=tk.LEFT, padx=(0, 6))
         
         backspace_button = tk.Button(
-            action_frame,
-            text="⌫ Backspace",
-            font=('Arial', 10),
-            bg='#e74c3c',
+            action_frame1,
+            text="⌫ Delete",
+            font=('Segoe UI', 11),
+            bg='#e67e22',
             fg='white',
+            activebackground='#d35400',
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
+            bd=0,
+            padx=14,
+            pady=10,
             cursor='hand2',
             command=self.backspace
         )
-        backspace_button.pack(side=tk.LEFT)
+        backspace_button.pack(side=tk.LEFT, padx=(0, 6))
         
-        speak_button = tk.Button(
-            action_frame,
-            text="🔊 Speak",
-            font=('Arial', 10),
-            bg='#27ae60',
+        self.auto_speak_var = tk.BooleanVar(value=False)
+        auto_speak_check = tk.Checkbutton(
+            action_frame1,
+            text="🔊 Auto",
+            variable=self.auto_speak_var,
+            font=('Segoe UI', 10, 'bold'),
+            bg='#ffffff',
+            fg='#2c3e50',
+            selectcolor='#ecf0f1',
+            activebackground='#ffffff',
+            cursor='hand2'
+        )
+        auto_speak_check.pack(side=tk.LEFT, padx=(8, 0))
+        
+        # Action buttons - Row 2
+        action_frame2 = tk.Frame(right_frame, bg='#ffffff')
+        action_frame2.pack(fill=tk.X, padx=20, pady=(0, 8))
+        
+        self.speak_button = tk.Button(
+            action_frame2,
+            text="🔊 SPEAK",
+            font=('Segoe UI', 13, 'bold'),
+            bg='#2ecc71',
             fg='white',
+            activebackground='#27ae60',
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
+            bd=0,
+            padx=25,
+            pady=12,
             cursor='hand2',
             command=self.speak_sentence
         )
-        speak_button.pack(side=tk.LEFT, padx=(10, 0))
+        self.speak_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         
         translate_button = tk.Button(
-            action_frame,
+            action_frame2,
             text="🌐 Translate",
-            font=('Arial', 10),
+            font=('Segoe UI', 11),
             bg='#9b59b6',
             fg='white',
+            activebackground='#8e44ad',
             relief=tk.FLAT,
-            padx=10,
-            pady=5,
+            bd=0,
+            padx=18,
+            pady=12,
             cursor='hand2',
             command=self.translate_sentence
         )
-        translate_button.pack(side=tk.LEFT, padx=(5, 0))
+        translate_button.pack(side=tk.LEFT, padx=(0, 0))
         
-        # Supported signs info
-        info_frame = tk.Frame(right_frame, bg='#e8f5e9', relief=tk.FLAT)
+        # Action buttons - Row 3
+        action_frame3 = tk.Frame(right_frame, bg='#ffffff')
+        action_frame3.pack(fill=tk.X, padx=20, pady=(0, 15))
+        
+        copy_button = tk.Button(
+            action_frame3,
+            text="📋 Copy",
+            font=('Segoe UI', 10),
+            bg='#3498db',
+            fg='white',
+            activebackground='#2980b9',
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=8,
+            cursor='hand2',
+            command=self.copy_to_clipboard
+        )
+        copy_button.pack(side=tk.LEFT, padx=(0, 6))
+        
+        save_button = tk.Button(
+            action_frame3,
+            text="💾 Save",
+            font=('Segoe UI', 10),
+            bg='#16a085',
+            fg='white',
+            activebackground='#138d75',
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=8,
+            cursor='hand2',
+            command=self.save_to_file
+        )
+        save_button.pack(side=tk.LEFT, padx=(0, 0))
+        
+        self.speech_status = tk.Label(
+            action_frame3,
+            text="",
+            font=('Segoe UI', 9),
+            bg='#ffffff',
+            fg='#7f8c8d'
+        )
+        self.speech_status.pack(side=tk.LEFT, padx=(15, 0))
+        
+        # Info section
+        info_frame = tk.Frame(right_frame, bg='#e8f5e9', relief=tk.FLAT, bd=1)
         info_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
         
         info_text = "⏳ Loading model...\nSupported classes will appear here."
         self.info_label = tk.Label(
             info_frame,
             text=info_text,
-            font=('Arial', 9),
+            font=('Segoe UI', 9),
             bg='#e8f5e9',
             fg='#2e7d32',
             justify=tk.LEFT
         )
-        self.info_label.pack(padx=10, pady=10)
+        self.info_label.pack(padx=12, pady=12)
     
     def load_model_async(self):
         def load():
@@ -525,15 +616,9 @@ class ISLBridgeApp:
         info_text = f"✅ Supports {len(self.available_classes)} gestures:\n"
         info_text += "\n".join(f"  • {part}" for part in parts)
         info_text += "\n🌐 Multi-language: English, Hindi, Tamil, Telugu"
+        info_text += "\n⚠️ Hold gesture steady for 2-3 seconds"
         
         self.info_label.config(text=info_text)
-    
-    def toggle_always_on_top(self):
-        """Toggle window always on top state"""
-        is_on_top = self.always_on_top_var.get()
-        self.root.attributes('-topmost', is_on_top)
-        if is_on_top:
-            self.root.lift()
     
     def toggle_camera(self):
         if not self.recording:
@@ -612,10 +697,8 @@ class ISLBridgeApp:
         
         self.gesture_buffer.clear()
         
-        # GPU memory cleanup if CUDA is available
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.debug("GPU memory cache cleared")
+        # GPU memory cleanup using gpu_utils
+        cleanup_gpu_memory()
     
     def capture_frames(self):
         if not self.recording or not self.camera:
@@ -673,12 +756,19 @@ class ISLBridgeApp:
                 if len(self.gesture_buffer) == seq_length and (self.frame_counter % self.prediction_interval == 0):
                     try:
                         sequence_array = np.array(self.gesture_buffer).reshape(1, seq_length, -1)
-                        result = self.recognition_model.predict_class(sequence_array, threshold=0.55)
+                        # Increased threshold from 0.55 to 0.75 for better accuracy
+                        result = self.recognition_model.predict_class(sequence_array, threshold=0.75)
                         
                         if result and isinstance(result, (tuple, list)) and len(result) >= 2:
                             predicted_sign, confidence_score = result[0], result[1]
                             
-                            if predicted_sign not in ["uncertain", "unknown"]:
+                            # More strict filtering: require higher confidence for specific problematic gestures
+                            min_confidence = 0.75
+                            if predicted_sign in ['V', 'K', 'N', 'G']:
+                                # These gestures need even higher confidence due to model bias
+                                min_confidence = 0.85
+                            
+                            if predicted_sign not in ["uncertain", "unknown"] and confidence_score >= min_confidence:
                                 self.update_prediction(predicted_sign, confidence_score)
                     
                     except Exception as e:
@@ -709,8 +799,32 @@ class ISLBridgeApp:
         if sign and sign != "—":
             self.add_to_sentence(sign)
             self.add_space()  # Automatically add space after adding sign
+            
+            # Auto-speak if enabled
+            if self.auto_speak_var.get():
+                self.speak_single_word(sign)
+    
+    def clear_placeholder(self, event=None):
+        """Clear placeholder text when user focuses on the text widget"""
+        if self.is_placeholder:
+            self.sentence_text.delete("1.0", tk.END)
+            self.sentence_text.config(fg='#2c3e50')  # Normal text color
+            self.is_placeholder = False
+    
+    def restore_placeholder(self, event=None):
+        """Restore placeholder if text widget is empty"""
+        current_text = self.sentence_text.get("1.0", tk.END).strip()
+        if not current_text:
+            self.sentence_text.delete("1.0", tk.END)
+            self.sentence_text.insert("1.0", "Your message will appear here...\n\n✨ Tips:\n• Hold a sign steady to detect it\n• Click '➕ Add Sign' to add to message\n• Enable '🔊 Auto' for instant speech\n• Use '🔊 SPEAK TEXT' to read full message")
+            self.sentence_text.config(fg='#95a5a6')  # Gray for placeholder
+            self.is_placeholder = True
     
     def add_to_sentence(self, sign):
+        # Clear placeholder if present
+        if self.is_placeholder:
+            self.clear_placeholder()
+        
         current_text = self.sentence_text.get("1.0", tk.END).strip()
         
         if self.translator and hasattr(self.translator, 'translate_gesture'):
@@ -730,16 +844,26 @@ class ISLBridgeApp:
     
     def add_space(self):
         """Add space to sentence"""
+        if self.is_placeholder:
+            self.clear_placeholder()
+        
         current_text = self.sentence_text.get("1.0", tk.END).strip()
         self.sentence_text.delete("1.0", tk.END)
         self.sentence_text.insert("1.0", current_text + " ")
     
     def backspace(self):
         """Remove last character"""
+        if self.is_placeholder:
+            return  # Don't modify placeholder
+        
         current_text = self.sentence_text.get("1.0", tk.END).strip()
         if current_text:
             self.sentence_text.delete("1.0", tk.END)
             self.sentence_text.insert("1.0", current_text[:-1])
+            
+            # Restore placeholder if text becomes empty
+            if len(current_text[:-1]) == 0:
+                self.restore_placeholder()
     
     def safe_speak_text(self, text):
         try:
@@ -773,17 +897,96 @@ class ISLBridgeApp:
     def speak_sentence(self):
         current_text = self.sentence_text.get("1.0", tk.END).strip()
         text_to_speak = current_text if current_text else "No text to speak"
-        self.safe_speak_text(text_to_speak)
+        
+        # Visual feedback
+        self.speak_button.config(bg='#f39c12', text='🔊 SPEAKING...')
+        self.speech_status.config(text="🗣️ Speaking...", fg='#f39c12')
+        
+        def speak_and_reset():
+            self.safe_speak_text(text_to_speak)
+            # Reset button after 2 seconds
+            import time
+            time.sleep(2)
+            self.root.after(0, lambda: self.speak_button.config(bg='#2ecc71', text='🔊 SPEAK TEXT'))
+            self.root.after(0, lambda: self.speech_status.config(text="✅ Done", fg='#27ae60'))
+            self.root.after(2000, lambda: self.speech_status.config(text=""))
+        
+        import threading
+        threading.Thread(target=speak_and_reset, daemon=True).start()
+    
+    def speak_single_word(self, word: str):
+        """Speak a single word/sign (used for auto-speak)"""
+        self.speech_status.config(text=f"🗣️ {word}", fg='#3498db')
+        
+        def speak_and_clear():
+            self.safe_speak_text(word)
+            import time
+            time.sleep(1)
+            self.root.after(0, lambda: self.speech_status.config(text=""))
+        
+        import threading
+        threading.Thread(target=speak_and_clear, daemon=True).start()
+    
+    def copy_to_clipboard(self):
+        """Copy message text to clipboard"""
+        current_text = self.sentence_text.get("1.0", tk.END).strip()
+        if current_text:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(current_text)
+            self.speech_status.config(text="📋 Copied!", fg='#3498db')
+            self.root.after(2000, lambda: self.speech_status.config(text=""))
+        else:
+            self.speech_status.config(text="⚠️ No text to copy", fg='#e74c3c')
+            self.root.after(2000, lambda: self.speech_status.config(text=""))
+    
+    def save_to_file(self):
+        """Save message text to file"""
+        current_text = self.sentence_text.get("1.0", tk.END).strip()
+        if not current_text:
+            self.speech_status.config(text="⚠️ No text to save", fg='#e74c3c')
+            self.root.after(2000, lambda: self.speech_status.config(text=""))
+            return
+        
+        try:
+            from tkinter import filedialog
+            from datetime import datetime
+            
+            default_name = f"ISL_Message_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                initialfile=default_name,
+                filetypes=[
+                    ("Text files", "*.txt"),
+                    ("All files", "*.*")
+                ]
+            )
+            
+            if filepath:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(current_text)
+                self.speech_status.config(text="💾 Saved!", fg='#16a085')
+                self.root.after(2000, lambda: self.speech_status.config(text=""))
+                logger.info(f"Message saved to {filepath}")
+        except Exception as e:
+            logger.error(f"Save error: {e}")
+            self.speech_status.config(text="❌ Save failed", fg='#e74c3c')
+            self.root.after(2000, lambda: self.speech_status.config(text=""))
     
     def translate_sentence(self):
+        if self.is_placeholder:
+            return  # Don't translate placeholder
+        
         current_text = self.sentence_text.get("1.0", tk.END).strip()
         if current_text and self.translator and hasattr(self.translator, 'translate_sentence'):
             translated = self.translator.translate_sentence(current_text, self.selected_language)
             self.sentence_text.delete("1.0", tk.END)
             self.sentence_text.insert("1.0", translated)
+            self.speech_status.config(text=f"🌐 Translated to {self.selected_language.upper()}", fg='#9b59b6')
+            self.root.after(2000, lambda: self.speech_status.config(text=""))
     
     def clear_sentence(self):
         self.sentence_text.delete("1.0", tk.END)
+        self.restore_placeholder()  # Show placeholder after clearing
         self.prediction_var.set("—")
         self.confidence_var.set("0%")
         self.confidence_bar['value'] = 0
@@ -803,10 +1006,9 @@ class ISLBridgeApp:
                 except Exception as e:
                     logger.warning(f"Error closing extractor: {e}")
             
-            # GPU memory cleanup
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger.info("GPU memory cleared")
+            # GPU memory cleanup using gpu_utils
+            cleanup_gpu_memory()
+            logger.info("GPU memory cleared")
             
             self.root.destroy()
             logger.info("Application closed successfully")

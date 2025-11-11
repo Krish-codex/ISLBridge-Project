@@ -1,66 +1,55 @@
 """
 ISL Bridge Configuration
-Central configuration for Indian Sign Language Recognition System
 """
 from pathlib import Path
 
-# Project structure
 PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
 LOGS_DIR = PROJECT_ROOT / "logs"
 EXPORTS_DIR = PROJECT_ROOT / "exports"
 
-# Create directories
 for dir_path in [DATA_DIR, MODELS_DIR, LOGS_DIR, EXPORTS_DIR]:
     dir_path.mkdir(exist_ok=True)
 
-# Data paths
 RAW_DATA_DIR = DATA_DIR / "raw"
 RAW_DATA_DIR.mkdir(exist_ok=True)
 
-# Create the main dataset directory
 FRAMES_DIR = RAW_DATA_DIR / "Frames_Word_Level"
 FRAMES_DIR.mkdir(exist_ok=True)
 
-# LSTM Model configuration
 MODEL_CONFIG = {
     "input_frames": 30,
     "input_dim": 166,
-    "hidden_dim": 128,
-    "num_layers": 2,
-    "lstm_units": 64,
-    "dropout_rate": 0.2,
-    "learning_rate": 0.001,
+    "hidden_dim": 512,
+    "num_layers": 4,
+    "lstm_units": 128,
+    "dropout_rate": 0.5,
+    "learning_rate": 0.0001,
     "batch_size": 32,
-    "epochs": 100,
-    "patience": 10,
-    "confidence_threshold": 0.55,
+    "epochs": 200,
+    "patience": 25,
+    "confidence_threshold": 0.70,
     "sequence_length": 30
 }
 
-# MediaPipe landmark detection
 MEDIAPIPE_CONFIG = {
     "min_detection_confidence": 0.5,
     "min_tracking_confidence": 0.5,
     "model_complexity": 1
 }
 
-# Translation and TTS
 TRANSLATION_CONFIG = {
     "default_language": "hi",
     "supported_languages": ["hi", "en", "ta", "te", "bn", "gu", "mr", "pa"],
     "tts_enabled": True,
     "tts_rate": 150,
     "tts_volume": 0.8,
-    "tts_mode": "hybrid"  # "offline", "online", or "hybrid" (try online first, fallback to offline)
+    "tts_mode": "hybrid"
 }
 
 def get_available_classes():
-    """
-    Dynamically detect all gesture classes from the dataset directory.
-    Supports letters, numbers, words, and phrases - just add folders and train.
-    """
+    """Detect gesture classes from dataset directory"""
     dataset_path = RAW_DATA_DIR / "Frames_Word_Level"
     
     if not dataset_path.exists():
@@ -89,7 +78,6 @@ def get_available_classes():
 
 ISL_CLASSES = get_available_classes()
 
-# Feature extraction
 FEATURE_CONFIG = {
     "landmark_count": 543,
     "feature_dim": 166,
@@ -97,24 +85,31 @@ FEATURE_CONFIG = {
     "sliding_window": True
 }
 
-# Application runtime settings
 APP_CONFIG = {
-    "prediction_interval": 5,  # Predict every N frames to reduce lag
-    "prediction_timeout": 2.0,  # Reset after N seconds of no new predictions
-    "frame_capture_interval": 30,  # Milliseconds between frame captures
+    "prediction_interval": 5,
+    "prediction_timeout": 2.0,
+    "frame_capture_interval": 30,
     "window_width": 1200,
     "window_height": 700,
-    "camera_retry_indices": [1, 2, 0],  # Camera indices to try in order
+    "camera_retry_indices": [1, 2, 0],
 }
 
-# Training configuration
 TRAINING_CONFIG = {
-    "test_size": 0.2,
-    "val_size": 0.1,
+    "test_size": 0.15,
+    "val_size": 0.15,
     "sequence_length": 30,
-    "max_samples_per_class": 1500,
-    "batch_size_large": 16,  # For datasets > 50000 samples
+    "max_samples_per_class": 2000,
+    "batch_size_large": 32,
     "batch_size_default": 32,
-    "early_stopping_accuracy": 0.85,
-    "print_interval": 10,  # Print training stats every N epochs
+    "early_stopping_accuracy": 0.95,
+    "print_interval": 5,
+}
+
+GPU_CONFIG = {
+    "enable_gpu": True,
+    "enable_mixed_precision": True,
+    "enable_cudnn_benchmark": True,
+    "gpu_memory_fraction": 0.8,
+    "num_workers": 4,
+    "pin_memory": True,
 }

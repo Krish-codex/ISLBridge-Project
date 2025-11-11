@@ -9,6 +9,7 @@ import numpy as np
 from typing import Tuple, Dict, List, Optional
 from sklearn.preprocessing import LabelEncoder
 from pathlib import Path
+from gpu_utils import optimize_device, get_device_info, cleanup_gpu_memory
 
 def get_config():
     from config import MODELS_DIR, MODEL_CONFIG, ISL_CLASSES
@@ -58,7 +59,19 @@ class ISLModel:
         _, MODEL_CONFIG, ISL_CLASSES = get_config()
         
         self.num_classes = num_classes or len(ISL_CLASSES)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Use gpu_utils for device selection
+        self.device = optimize_device()
+        device_info = get_device_info()
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        if device_info['has_cuda']:
+            logger.info(f"Model using GPU: {device_info['device_name']}")
+            logger.info(f"GPU Memory: {device_info['total_memory_gb']:.2f} GB")
+        else:
+            logger.info("Model using CPU (no GPU detected)")
+        
         self.label_encoder = LabelEncoder()
         self.class_weights = None
         self.history = None
@@ -183,14 +196,24 @@ class ISLModel:
         
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
-            outputs = self.model(X_tensor)
-            probabilities = F.softmax(outputs, dim=1)
+            
+            # Use mixed precision for GPU inference (faster)
+            if self.device.type == 'cuda':
+                with torch.cuda.amp.autocast():
+                    outputs = self.model(X_tensor)
+                    probabilities = F.softmax(outputs, dim=1)
+            else:
+                outputs = self.model(X_tensor)
+                probabilities = F.softmax(outputs, dim=1)
+        
+        # Move to CPU for numpy conversion
+        result = probabilities.cpu().numpy()
         
         # GPU memory cleanup after prediction
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             
-        return probabilities.cpu().numpy()
+        return result
     
     def predict_class(self, X: np.ndarray, threshold: Optional[float] = None) -> Tuple[str, float]:
         try:
@@ -198,13 +221,26 @@ class ISLModel:
             
             if len(probabilities.shape) > 1:
                 probabilities = probabilities[0]
-                
-            max_prob_idx = np.argmax(probabilities)
-            max_prob = probabilities[max_prob_idx]
             
+            # Get top 3 predictions to check for ambiguity
+            top_3_indices = np.argsort(probabilities)[-3:][::-1]
+            top_3_probs = probabilities[top_3_indices]
+            
+            max_prob_idx = top_3_indices[0]
+            max_prob = top_3_probs[0]
+            
+            # If threshold is set and confidence is low, return uncertain
             if threshold and max_prob < threshold:
                 return "uncertain", max_prob
             
+            # Check if top 2 predictions are too close (ambiguous)
+            if len(top_3_probs) > 1:
+                second_prob = top_3_probs[1]
+                # If difference is less than 15%, it's ambiguous
+                if (max_prob - second_prob) < 0.15:
+                    return "uncertain", max_prob
+            
+            # Get the predicted class name
             if hasattr(self.label_encoder, 'classes_') and len(self.label_encoder.classes_) > 0:
                 predicted_class = self.label_encoder.inverse_transform([max_prob_idx])[0]
             else:
@@ -274,7 +310,8 @@ class ISLModel:
             label_classes = None
             if checkpoint.get('label_encoder_classes'):
                 label_classes = checkpoint['label_encoder_classes']
-                self.label_encoder.classes_ = np.array(label_classes)
+                # Properly fit the label encoder with the classes
+                self.label_encoder.fit(label_classes)
                 logger.info(f"Loaded {len(label_classes)} label classes")
             else:
                 logger.warning("No label classes found in checkpoint")

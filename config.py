@@ -29,7 +29,7 @@ MODEL_CONFIG = {
     "batch_size": 16,
     "epochs": 150,
     "patience": 20,
-    "confidence_threshold": 0.60,
+    "confidence_threshold": 0.75,
     "sequence_length": 30
 }
 
@@ -44,8 +44,8 @@ TRANSLATION_CONFIG = {
     "supported_languages": ["hi", "en", "ta", "te", "bn", "gu", "mr", "pa"],
     "tts_enabled": True,
     "tts_rate": 150,
-    "tts_volume": 0.8,
-    "tts_mode": "hybrid"
+    "tts_volume": 1.0,
+    "tts_mode": "offline"
 }
 
 def get_available_classes():

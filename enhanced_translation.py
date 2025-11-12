@@ -434,10 +434,22 @@ class MultiLanguageTranslator:
             def run_tts():
                 with self.tts_lock:
                     try:
-                        if self.tts_engine and not self.tts_running:
+                        if not self.tts_running:
                             self.tts_running = True
-                            self.tts_engine.say(text)
-                            self.tts_engine.runAndWait()
+                            
+                            # Re-initialize engine to ensure it's fresh
+                            engine = pyttsx3.init()
+                            engine.setProperty('rate', 150)
+                            engine.setProperty('volume', 1.0)
+                            
+                            # Ensure we're using a valid voice
+                            voices = engine.getProperty('voices')
+                            if voices:
+                                engine.setProperty('voice', voices[0].id)
+                            
+                            engine.say(text)
+                            engine.runAndWait()
+                            engine.stop()
                     except Exception as e:
                         logger.error(f"pyttsx3 TTS thread error: {e}")
                     finally:
